@@ -29,6 +29,8 @@
       padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 13px;
     }
     #hud button:hover { background: #3a3a45; }
+    #hud button.toggle.on { background: #1d4ed8; border-color: #2563eb; }
+    #hud button.toggle.on:hover { background: #2563eb; }
     #canvas-wrap { flex: 1 1 auto; position: relative; min-height: 0; }
     canvas { display: block; position: absolute; inset: 0; width: 100%; height: 100%; }
 
@@ -168,12 +170,27 @@
       font-size: 12px; line-height: 1; padding: 0 0 0 2px;
     }
     .chip.mod .chip-x:hover { color: #f87171; }
+    .chip.sp {
+      background: #2a1d3a; border-color: #5a2a6a; color: #d8b4fe;
+      padding: 2px 6px; border-radius: 12px; font-size: 10px;
+    }
+    .chip.sp .chip-x {
+      background: none; border: none; color: #d8b4fe; cursor: pointer;
+      font-size: 12px; line-height: 1; padding: 0 0 0 2px;
+    }
+    .chip.sp .chip-x:hover { color: #f87171; }
     .add-mod {
       background: #2a2a35; color: #e0e0e0; border: 1px dashed #3a3a45;
       border-radius: 12px; cursor: pointer; width: 18px; height: 18px;
       line-height: 1; font-size: 12px;
     }
     .add-mod:hover { background: #3a3a45; }
+    .add-sp {
+      background: #2a2a35; color: #d8b4fe; border: 1px dashed #5a2a6a;
+      border-radius: 12px; cursor: pointer; width: 18px; height: 18px;
+      line-height: 1; font-size: 12px;
+    }
+    .add-sp:hover { background: #3a3a45; }
 
     .leader-toggle { display: inline-flex; align-items: center; gap: 3px; font-size: 10px; color: #aaa; }
 
@@ -197,6 +214,74 @@
       .member { min-width: 100px; padding: 5px 8px; }
       .member .icon { width: 20px; height: 20px; }
     }
+
+    /* Map overlay (Slay the Spire style) */
+    #map-overlay {
+      position: fixed; inset: 0; z-index: 200;
+      background: rgba(0, 0, 0, 0.75);
+      display: flex; align-items: center; justify-content: center;
+    }
+    #map-overlay.hidden { display: none; }
+    .map-panel {
+      background: #1e1e26; border: 1px solid #3a3a45; border-radius: 12px;
+      padding: 20px 24px; max-width: 90vw; max-height: 90vh;
+      display: flex; flex-direction: column; gap: 12px;
+    }
+    .map-panel h3 { margin: 0; color: #e0e0e0; font-size: 16px; }
+    #map-svg { display: block; }
+    .map-node { cursor: pointer; }
+    .map-node circle { stroke: #3a3a45; stroke-width: 2; }
+    .map-node text { fill: #e0e0e0; font-size: 11px; text-anchor: middle; }
+    .map-node.available circle { stroke: #fbbf24; stroke-width: 3; }
+    .map-node.available:hover circle { fill: #3a3a45; }
+    .map-node.current circle { stroke: #4ade80; stroke-width: 3; }
+    .map-node.done circle { opacity: 0.5; }
+    .map-edge { stroke: #3a3a45; stroke-width: 2; }
+    .map-edge.available { stroke: #fbbf24; }
+
+    /* Rest overlay */
+    #rest-overlay {
+      position: fixed; inset: 0; z-index: 210;
+      background: rgba(0, 0, 0, 0.75);
+      display: flex; align-items: center; justify-content: center;
+    }
+    #rest-overlay.hidden { display: none; }
+    .rest-panel {
+      background: #1e1e26; border: 1px solid #3a3a45; border-radius: 12px;
+      padding: 20px 24px; max-width: 90vw; max-height: 90vh;
+      display: flex; flex-direction: column; gap: 12px;
+    }
+    .rest-panel h3 { margin: 0; color: #e0e0e0; font-size: 16px; }
+    .rest-sub { margin: 0; color: #888; font-size: 12px; }
+    #rest-candidates { display: flex; gap: 12px; flex-wrap: wrap; }
+    .rest-candidate {
+      background: #16161d; border: 1px solid #2a2a35; border-radius: 8px;
+      padding: 12px; display: flex; flex-direction: column; gap: 6px;
+      min-width: 140px; cursor: pointer;
+    }
+    .rest-candidate:hover { border-color: #fbbf24; }
+    .rest-candidate.recruited { opacity: 0.4; pointer-events: none; }
+    .rest-candidate .rc-name { color: #e0e0e0; font-weight: 600; font-size: 13px; }
+    .rest-candidate .rc-stats { color: #888; font-size: 11px; }
+    .rest-candidate .rc-attack { color: #aaa; font-size: 11px; }
+    #btn-finish-rest {
+      background: #1d4ed8; color: #fff; border: 1px solid #2563eb;
+      padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 13px;
+    }
+    #btn-finish-rest:hover { background: #2563eb; }
+
+    /* Bond legend (side panel) */
+    #bond-legend {
+      position: fixed; right: 12px; top: 60px; z-index: 150;
+      background: #1e1e26; border: 1px solid #3a3a45; border-radius: 8px;
+      padding: 10px 12px; font-size: 11px; color: #aaa;
+      display: flex; flex-direction: column; gap: 6px; min-width: 180px;
+    }
+    #bond-legend.hidden { display: none; }
+    #bond-legend h4 { margin: 0; color: #e0e0e0; font-size: 12px; }
+    #bond-legend .legend-row { display: flex; align-items: center; gap: 8px; }
+    #bond-legend .swatch { width: 18px; height: 3px; border-radius: 2px; flex: 0 0 auto; }
+    #bond-legend .legend-row span { color: #888; }
   </style>
 </head>
 <body>
@@ -205,7 +290,8 @@
       <span class="status" id="status">Ready</span>
       <button id="btn-start">Start</button>
       <button id="btn-restart">Restart</button>
-      <span class="hint">Space: start &nbsp;·&nbsp; R: reset</span>
+      <button id="btn-bonds" class="toggle on" title="Toggle bond visualizer">Bonds: On</button>
+      <span class="hint">Space: start &nbsp;·&nbsp; R: reset &nbsp;·&nbsp; B: bonds</span>
     </div>
     <div id="canvas-wrap">
       <canvas id="game"></canvas>
@@ -220,6 +306,25 @@
       <div id="member-list"></div>
     </div>
     <div id="team-ui"></div>
+    <div id="map-overlay" class="hidden">
+      <div class="map-panel">
+        <h3>Choose your path</h3>
+        <svg id="map-svg"></svg>
+      </div>
+    </div>
+    <div id="rest-overlay" class="hidden">
+      <div class="rest-panel">
+        <h3>Rest</h3>
+        <p class="rest-sub">A new ally offers to join your team.</p>
+        <div id="rest-candidates"></div>
+        <button id="btn-finish-rest" class="primary">Continue</button>
+      </div>
+    </div>
+    <div id="bond-legend">
+      <h4>Bonds</h4>
+      <div class="legend-row"><span class="swatch" style="background:#4ade80"></span><span>Bonded members coordinate</span></div>
+      <div class="legend-row"><span class="swatch" style="background:#4ade80;opacity:0.4"></span><span>Stronger line = closer bond</span></div>
+    </div>
   </div>
   <script type="module" src="./js/main.js"></script>
 </body>

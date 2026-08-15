@@ -1,6 +1,6 @@
 // Entry point. Wires sim + render together with a fixed-timestep loop.
 
-import { CONFIG, ATTACK_TYPES, TARGET_RULES, ATTACK_SHAPES, MOVEMENTS, SHAPES, MODIFIERS } from './sim/config.js';
+import { CONFIG, ATTACK_TYPES, TARGET_RULES, ATTACK_SHAPES, MOVEMENTS, SHAPES, MODIFIERS, SELF_PRESERVATION } from './sim/config.js';
 import { Sim } from './sim/sim.js';
 import { Renderer } from './render/renderer.js';
 
@@ -11,6 +11,12 @@ const customizerEl = document.getElementById('customizer');
 const memberListEl = document.getElementById('member-list');
 const btnStart = document.getElementById('btn-start');
 const btnRestart = document.getElementById('btn-restart');
+const btnBonds = document.getElementById('btn-bonds');
+const bondLegendEl = document.getElementById('bond-legend');
+const mapOverlayEl = document.getElementById('map-overlay');
+const mapSvgEl = document.getElementById('map-svg');
+const restOverlayEl = document.getElementById('rest-overlay');
+const restCandidatesEl = document.getElementById('rest-candidates');
 
 const sim = new Sim();
 const renderer = new Renderer(canvas);
@@ -50,7 +56,7 @@ const SHAPE_LABELS = {
   rangeOneShot: 'Range one-shot', rangeAoe: 'Range AOE', meleeOneShot: 'Melee one-shot',
   meleeCone: 'Melee cone', meleeAoe: 'Melee AOE',
 };
-const MOVE_LABELS = { hold: 'Hold', keepDistance: 'Keep distance', kite: 'Kite', evade: 'Evade', follow: 'Follow', advance: 'Advance' };
+const MOVE_LABELS = { hold: 'Hold', keepDistance: 'Keep distance', kite: 'Kite', evade: 'Evade', follow: 'Follow', advance: 'Advance', flank: 'Flank', charge: 'Charge', guard: 'Guard', hunt: 'Hunt' };
 const RULE_LABELS = { lowestHp: 'Lowest HP', highestHp: 'Highest HP', closest: 'Closest', strongest: 'Strongest', weakest: 'Weakest', mostAtOnce: 'Most at once', threatened: 'Threatened' };
 
 function modifierChips(mods) {
@@ -58,6 +64,14 @@ function modifierChips(mods) {
     const def = MODIFIERS.find(x => x.id === mid);
     if (!def) return '';
     return `<span class="chip mod" data-mod="${mid}" title="${def.desc}">${def.label}<button class="chip-x" data-mod="${mid}">×</button></span>`;
+  }).join('');
+}
+
+function selfPreservationChips(sp) {
+  return (sp || []).map(id => {
+    const def = SELF_PRESERVATION.find(x => x.id === id);
+    if (!def) return '';
+    return `<span class="chip sp" data-sp="${id}" title="${def.desc}">${def.label}<button class="chip-x" data-sp="${id}">×</button></span>`;
   }).join('');
 }
 
@@ -101,13 +115,18 @@ function memberCard(m) {
 
         <div class="chip move" title="Movement">
           <span class="chip-emoji">🏃</span>
-          <select class="mmove">${optionList('move', MOVEMENTS, ['Hold', 'Keep distance', 'Kite', 'Evade', 'Follow', 'Advance'], m.movement)}</select>
+          <select class="mmove">${optionList('move', MOVEMENTS, ['Hold', 'Keep distance', 'Kite', 'Evade', 'Follow', 'Advance', 'Flank', 'Charge', 'Guard', 'Hunt'], m.movement)}</select>
           <label class="leader-toggle"><input class="mleaderchk" type="checkbox" ${m.leader ? 'checked' : ''} /> Leader</label>
         </div>
 
         <div class="mod-row">
           <span class="mod-chips">${modifierChips(mods)}</span>
           <button class="add-mod" title="Add modifier">+</button>
+        </div>
+
+        <div class="mod-row">
+          <span class="mod-chips">${selfPreservationChips(m.selfPreservation)}</span>
+          <button class="add-sp" title="Add instinct">+</button>
         </div>
       </div>
     </div>
@@ -155,6 +174,7 @@ function readMembers() {
         atk: num('.matk'),
       },
       modifiers: Array.from(card.querySelectorAll('.mod-chips .chip.mod')).map(c => c.dataset.mod),
+      selfPreservation: Array.from(card.querySelectorAll('.mod-chips .chip.sp')).map(c => c.dataset.sp),
       target: { side: str('.mtside'), rule: str('.mtrule') },
       movement: str('.mmove'),
       leader: card.querySelector('.mleaderchk').checked,
@@ -179,6 +199,7 @@ function addMember() {
     stats: { hp: 100, armor: 0, speed: 3.0, size: 0.7 },
     attack: { type: 'damage', shape: 'meleeOneShot', range: 1.2, atk: 15 },
     modifiers: [],
+    selfPreservation: [],
     target: { side: 'enemy', rule: 'closest' },
     movement: 'advance',
     leader: false,
@@ -218,6 +239,20 @@ function addModifier(card, modId) {
   container.appendChild(chip);
 }
 
+// Add a self-preservation instinct chip to a member card.
+function addSelfPreservation(card, spId) {
+  const container = card.querySelectorAll('.mod-chips')[1];
+  if (container.querySelector(`.chip.sp[data-sp="${spId}"]`)) return; // already present
+  const def = SELF_PRESERVATION.find(x => x.id === spId);
+  if (!def) return;
+  const chip = document.createElement('span');
+  chip.className = 'chip sp';
+  chip.dataset.sp = spId;
+  chip.title = def.desc;
+  chip.innerHTML = `${def.label}<button class="chip-x" data-sp="${spId}">×</button>`;
+  container.appendChild(chip);
+}
+
 customizerEl.addEventListener('click', (e) => {
   // Toggle a member card's expanded/collapsed state.
   if (e.target.classList.contains('mhead') || (e.target.closest('.mhead') && !e.target.closest('.mremove') && !e.target.closest('.mname') && !e.target.closest('.mdup'))) {
@@ -238,9 +273,9 @@ customizerEl.addEventListener('click', (e) => {
     duplicateMember(card);
     return;
   }
-  // Remove a modifier chip.
+  // Remove a modifier or instinct chip.
   if (e.target.classList.contains('chip-x')) {
-    e.target.closest('.chip.mod').remove();
+    e.target.closest('.chip').remove();
     return;
   }
   // Add a modifier: show a small inline picker.
@@ -250,6 +285,14 @@ customizerEl.addEventListener('click', (e) => {
     const available = MODIFIERS.filter(m => !existing.includes(m.id));
     if (available.length === 0) return;
     showModPicker(e.target, available, (modId) => addModifier(card, modId));
+  }
+  // Add a self-preservation instinct.
+  if (e.target.classList.contains('add-sp')) {
+    const card = e.target.closest('.mcard');
+    const existing = Array.from(card.querySelectorAll('.mod-chips .chip.sp')).map(c => c.dataset.sp);
+    const available = SELF_PRESERVATION.filter(m => !existing.includes(m.id));
+    if (available.length === 0) return;
+    showModPicker(e.target, available, (id) => addSelfPreservation(card, id));
   }
 });
 
@@ -285,7 +328,7 @@ function closeModPicker() {
 }
 
 document.addEventListener('click', (e) => {
-  if (!e.target.closest('.mod-picker') && !e.target.closest('.add-mod')) {
+  if (!e.target.closest('.mod-picker') && !e.target.closest('.add-mod') && !e.target.closest('.add-sp')) {
     closeModPicker();
   }
 });
@@ -354,6 +397,8 @@ function frame(now) {
   renderer.render(sim);
   updateHud();
   updateTeamUi();
+  updateMap();
+  updateRest();
   requestAnimationFrame(frame);
 }
 
@@ -364,6 +409,12 @@ function updateHud() {
   } else if (sim.over === 'lose') {
     statusEl.textContent = 'Defeat! The team was wiped out.';
     statusEl.className = 'status lose';
+  } else if (sim.mapOpen) {
+    statusEl.textContent = 'Choose your next room';
+    statusEl.className = 'status';
+  } else if (sim.restOpen) {
+    statusEl.textContent = 'Rest — recruit an ally';
+    statusEl.className = 'status';
   } else if (sim.started) {
     statusEl.textContent = 'Level ' + sim.level + ' — fighting...';
     statusEl.className = 'status';
@@ -396,12 +447,150 @@ function updateTeamUi() {
 btnStart.addEventListener('click', () => sim.start());
 btnRestart.addEventListener('click', () => sim.reset());
 
+// Toggle the bond visualizer (button + B key stay in sync).
+function setBonds(on) {
+  renderer.showBonds = on;
+  btnBonds.textContent = on ? 'Bonds: On' : 'Bonds: Off';
+  btnBonds.classList.toggle('on', on);
+  bondLegendEl.classList.toggle('hidden', !on);
+}
+btnBonds.addEventListener('click', () => setBonds(!renderer.showBonds));
+
+// --- Map overlay ---
+
+const NODE_COLORS = {
+  start: '#64748b', combat: '#f87171', elite: '#fb923c',
+  rest: '#4ade80', treasure: '#fbbf24', boss: '#f43f5e',
+};
+const NODE_LABELS = {
+  start: 'Start', combat: 'Fight', elite: 'Elite',
+  rest: 'Rest', treasure: 'Treasure', boss: 'Boss',
+};
+
+let mapRendered = false;
+
+function updateMap() {
+  if (!sim.mapOpen) {
+    if (!mapOverlayEl.classList.contains('hidden')) {
+      mapOverlayEl.classList.add('hidden');
+      mapRendered = false;
+    }
+    return;
+  }
+  mapOverlayEl.classList.remove('hidden');
+  if (!mapRendered) {
+    renderMap();
+    mapRendered = true;
+  }
+}
+
+function renderMap() {
+  const { nodes, edges } = sim.map;
+  const choices = sim._nextChoices();
+  const choiceIds = new Set(choices.map(c => c.id));
+
+  // Layout: columns by floor, rows spread vertically.
+  const floors = Math.max(...nodes.map(n => n.floor)) + 1;
+  const colW = 120, rowH = 90, pad = 40;
+  const width = floors * colW + pad;
+  const byFloor = {};
+  for (const n of nodes) (byFloor[n.floor] ||= []).push(n);
+  const maxRows = Math.max(...Object.values(byFloor).map(a => a.length));
+  const height = maxRows * rowH + pad;
+
+  mapSvgEl.setAttribute('viewBox', `0 0 ${width} ${height}`);
+  mapSvgEl.setAttribute('width', width);
+  mapSvgEl.setAttribute('height', height);
+
+  const pos = {};
+  for (const n of nodes) {
+    const arr = byFloor[n.floor];
+    const idx = arr.indexOf(n);
+    const x = pad / 2 + n.floor * colW + colW / 2;
+    const y = pad / 2 + (idx + (maxRows - arr.length) / 2) * rowH + rowH / 2;
+    pos[n.id] = { x, y };
+  }
+
+  let svg = '';
+  // Edges.
+  for (const e of edges) {
+    const a = pos[e.from], b = pos[e.to];
+    const cls = choiceIds.has(e.to) ? 'map-edge available' : 'map-edge';
+    svg += `<line class="${cls}" x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" />`;
+  }
+  // Nodes.
+  for (const n of nodes) {
+    const p = pos[n.id];
+    const isCurrent = n.id === sim.currentNodeId;
+    const isChoice = choiceIds.has(n.id);
+    const isDone = n.floor < (sim.map.nodes.find(x => x.id === sim.currentNodeId)?.floor ?? 0);
+    const cls = isCurrent ? 'current' : isChoice ? 'available' : isDone ? 'done' : '';
+    const color = NODE_COLORS[n.type] || '#64748b';
+    svg += `<g class="map-node ${cls}" data-id="${n.id}">
+      <circle cx="${p.x}" cy="${p.y}" r="22" fill="${color}" />
+      <text x="${p.x}" y="${p.y + 4}">${NODE_LABELS[n.type] || n.type}</text>
+    </g>`;
+  }
+  mapSvgEl.innerHTML = svg;
+
+  // Click handler: choose an available node.
+  mapSvgEl.querySelectorAll('.map-node.available').forEach(g => {
+    g.addEventListener('click', () => sim.chooseNode(g.dataset.id));
+  });
+}
+
+// --- Rest overlay ---
+
+let restRendered = false;
+
+function updateRest() {
+  if (!sim.restOpen) {
+    if (!restOverlayEl.classList.contains('hidden')) {
+      restOverlayEl.classList.add('hidden');
+      restRendered = false;
+    }
+    return;
+  }
+  restOverlayEl.classList.remove('hidden');
+  if (!restRendered) {
+    renderRest();
+    restRendered = true;
+  }
+}
+
+function renderRest() {
+  restCandidatesEl.innerHTML = '';
+  for (const c of sim.restCandidates) {
+    const el = document.createElement('div');
+    el.className = 'rest-candidate';
+    el.dataset.id = c.id;
+    el.innerHTML = `
+      <div class="rc-name">${c.name}</div>
+      <div class="rc-stats">HP ${c.stats.hp} · Arm ${c.stats.armor} · Spd ${c.stats.speed.toFixed(1)}</div>
+      <div class="rc-attack">${c.attack.type} · ${c.attack.shape} · ${c.movement}</div>
+    `;
+    el.addEventListener('click', () => {
+      sim.recruitMember(c.id);
+      el.classList.add('recruited');
+    });
+    restCandidatesEl.appendChild(el);
+  }
+}
+
+document.getElementById('btn-finish-rest').addEventListener('click', () => {
+  sim.finishRest();
+  restRendered = false;
+  buildTeamUi();
+});
+
 window.addEventListener('keydown', (e) => {
   if (e.code === 'Space') {
     e.preventDefault();
     sim.start();
   } else if (e.code === 'KeyR') {
     sim.reset();
+  } else if (e.code === 'KeyB') {
+    setBonds(!renderer.showBonds);
   }
 });
 

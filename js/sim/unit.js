@@ -14,6 +14,8 @@ export class Unit {
     this.isBat = opts.team === 'enemy';
     this.pos = { ...opts.pos };
     this.vel = { x: 0, y: 0 };
+    this.facing = opts.facing ?? 0;   // radians, smoothed toward movement direction
+    this.wanderPhase = Math.random() * Math.PI * 2; // per-unit idle drift offset
 
     // Stats come from def.stats (members) or def directly (bat).
     const stats = def.stats || def;
@@ -34,10 +36,14 @@ export class Unit {
     this.state = 'idle';
     this.path = null;               // array of waypoints (ground units)
     this.pathIndex = 0;
+    this.pathGoal = null;           // goal the current path was computed for
+    this.following = false;         // follower is inside its follow distance
+    this.seekingHeal = false;       // self-preservation: currently fleeing to healer
     this.tauntTimer = 0;
     this.taunted = false;
     this.kiteTimer = 0;
     this.slowTimer = 0;
+    this.chargeReady = false;
   }
 
   // Convenience accessors for member attributes.
@@ -46,6 +52,7 @@ export class Unit {
   get movement() { return this.def.movement; }
   get isLeader() { return !!this.def.leader; }
   get modifiers() { return this.def.modifiers || []; }
+  get selfPreservation() { return this.def.selfPreservation || []; }
 
   // Effective speed, halved while slowed.
   get effSpeed() { return this.slowTimer > 0 ? this.speed * 0.5 : this.speed; }

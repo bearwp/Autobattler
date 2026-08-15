@@ -15,7 +15,7 @@ export const ATTACK_SHAPES = [
   'rangeOneShot', 'rangeAoe', 'meleeOneShot', 'meleeCone', 'meleeAoe',
 ];
 
-export const MOVEMENTS = ['hold', 'keepDistance', 'kite', 'evade', 'follow', 'advance'];
+export const MOVEMENTS = ['hold', 'keepDistance', 'kite', 'evade', 'follow', 'advance', 'flank', 'charge', 'guard', 'hunt'];
 
 export const SHAPES = ['square', 'triangle', 'circle'];
 
@@ -28,6 +28,15 @@ export const MODIFIERS = [
   { id: 'slow',      label: 'Slow',      desc: 'Halve target speed briefly' },
   { id: 'peel',      label: 'Peel',      desc: 'Rush to defend squishy allies under attack' },
   { id: 'evasive',   label: 'Evasive',   desc: 'Back away from whoever is targeting you' },
+];
+
+// Self-preservation instincts: situational movement overrides that kick in
+// when a member is threatened or hurt. Unlike modifiers (which layer onto an
+// attack), these run every frame in the movement phase and override the
+// member's normal movement until the danger passes.
+export const SELF_PRESERVATION = [
+  { id: 'hide',     label: 'Hide',      desc: 'Retreat behind the tankiest ally when threatened' },
+  { id: 'seekHeal', label: 'Seek heal', desc: 'Run to the healer when badly hurt' },
 ];
 
 export const CONFIG = {
@@ -67,6 +76,7 @@ export const CONFIG = {
       stats: { hp: 300, armor: 8, speed: 2.2, size: 0.9 },
       attack: { type: 'taunt', shape: 'meleeOneShot', range: 4.0, atk: 15 },
       modifiers: ['peel'],
+      selfPreservation: [],
       target: { side: 'enemy', rule: 'closest' },
       movement: 'advance', leader: true,
     },
@@ -74,15 +84,17 @@ export const CONFIG = {
       id: 'm2', name: 'Soldier', color: '#ef4444', shape: 'square',
       stats: { hp: 180, armor: 4, speed: 3.0, size: 0.7 },
       attack: { type: 'damage', shape: 'meleeCone', range: 1.8, atk: 30 },
-      modifiers: [],
+      modifiers: ['lifesteal'],
+      selfPreservation: [],
       target: { side: 'enemy', rule: 'closest' },
-      movement: 'follow', leader: false,
+      movement: 'charge', leader: false,
     },
     {
       id: 'm3', name: 'Archer', color: '#22c55e', shape: 'triangle',
       stats: { hp: 100, armor: 0, speed: 3.0, size: 0.7 },
       attack: { type: 'damage', shape: 'rangeOneShot', range: 7.0, atk: 20 },
       modifiers: ['pierce'],
+      selfPreservation: ['hide'],
       target: { side: 'enemy', rule: 'lowestHp' },
       movement: 'kite', leader: false,
     },
@@ -91,6 +103,7 @@ export const CONFIG = {
       stats: { hp: 80, armor: 0, speed: 3.0, size: 0.7 },
       attack: { type: 'heal', shape: 'rangeOneShot', range: 6.0, atk: 25 },
       modifiers: [],
+      selfPreservation: ['hide'],
       target: { side: 'ally', rule: 'lowestHp' },
       movement: 'keepDistance', leader: false,
     },
@@ -110,6 +123,19 @@ export const CONFIG = {
     color: '#a855f7', shape: 'triangle', size: 0.4,
     count: 8,               // base count for level 1
     countPerLevel: 4,       // extra bats added per level
+  },
+
+  // Map (Slay the Spire style): a branching node graph the player navigates
+  // between rooms. Each node is a room with a type that changes its content.
+  map: {
+    floors: 6,              // number of columns (start + middle + boss)
+    minPerFloor: 3,         // min nodes per middle floor
+    maxPerFloor: 5,         // max nodes per middle floor
+    eliteHpMult: 1.6,       // elite bats have more HP
+    eliteAtkMult: 1.3,      // elite bats hit harder
+    bossHp: 400,            // boss bat HP
+    bossAtk: 30,            // boss bat attack
+    treasureHpBonus: 10,    // permanent max-HP bonus from a treasure room
   },
 
   // Boids parameters (bats)
@@ -142,9 +168,11 @@ export const CONFIG = {
 
   // Team formation / behavior
   team: {
-    separationRadius: 0.7,
+    separationRadius: 1.1,
     separationWeight: 2.0,
-    followDistance: 1.5,    // distance a follower holds from its leader
+    followDistance: 1.5,    // distance a follower trails behind its leader
+    followHysteresis: 0.4,  // dead-zone so follow doesn't oscillate at the boundary
+    repathDistance: 1.0,    // goal must move this far before re-running A*
     keepDistance: 3.0,      // distance a keepDistance unit tries to hold
     kiteDistance: 3.0,      // distance at which a kite unit backs away
     evadeDistance: 3.0,     // distance at which an evade unit backs away
@@ -152,7 +180,37 @@ export const CONFIG = {
     protectRadius: 2.5,     // enemy within this of a squishy ally triggers protection
     protectEngageRange: 6.0, // how far a peel unit will travel to defend
     accel: 20,              // max speed change per second (smooths movement)
+    turnRate: 3.5,          // max facing change per second (radians), smooths turning
+    arrivalRadius: 0.6,     // ease to a stop within this distance of a goal
+    slowRadius: 3.0,        // begin slowing within this distance of the goal
+    minSpeedFactor: 0.25,   // fraction of full speed at the slowest (near goal)
+    idleWander: 0.4,        // max speed of the subtle drift while holding still
+    idleWanderPeriod: 1.7,  // seconds per full wander oscillation
     keepHysteresis: 0.5,    // dead-zone so keepDistance doesn't oscillate
     kiteHysteresis: 0.5,    // dead-zone so kite doesn't oscillate
+    flankDistance: 2.5,     // how far to the side a flank unit circles its target
+    chargeSpeedMult: 1.6,   // speed multiplier while a charge unit closes in
+    chargeBonus: 15,        // bonus damage on a charge hit
+    guardDistance: 2.0,      // distance a guard holds from its guarded ally
+    guardEngageRange: 4.0,  // enemy within this of the guarded ally triggers engagement
+    hideThreatRange: 4.0,   // enemy within this of the unit triggers hiding
+    hideOffset: 1.5,        // how far behind the protector to stand
+    healSeekThreshold: 0.4, // hp fraction below which a unit seeks healing
+    healSeekHysteresis: 0.1, // dead-zone so seek-heal doesn't oscillate
+  },
+
+  // Synergy: persistent pair bonds between members. Bonds grow only from
+  // coordinated action (focus fire, protect, heal) and from clearing a room
+  // together. They have no stat effect; they bias the AI's decisions toward
+  // the bonded ally (who to focus fire with, protect, and heal).
+  synergy: {
+    focusBond: 4,           // bond growth per hit on a target an ally is also attacking
+    peelBond: 8,            // bond growth per peel (defending an ally)
+    healBond: 10,           // bond growth per heal
+    roomClearBond: 15,      // bond growth between all surviving members on room clear
+    focusBias: 3.0,         // how much bond weights focus-fire target choice
+    healBiasFactor: 0.5,    // how much bond weights a healer's target choice
+    protectBias: 2.0,       // how much bond weights which ally to peel for
+    bondCap: 100,           // bond value at which the visual line is fully opaque
   },
 };

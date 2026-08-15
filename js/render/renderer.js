@@ -8,6 +8,7 @@ export class Renderer {
     this.ctx = canvas.getContext('2d');
     this.scale = 1;
     this.offset = { x: 0, y: 0 };
+    this.showBonds = true;      // toggle bond visualizer with the B key
     this._resize();
     window.addEventListener('resize', () => this._resize());
     // Re-fit whenever the canvas element's layout size changes (e.g. the
@@ -52,8 +53,35 @@ export class Renderer {
     ctx.clearRect(0, 0, w, h);
 
     this._drawRoom(sim);
+    this._drawBonds(sim);
     this._drawUnits(sim);
     this._drawEffects(sim);
+  }
+
+  // Draw lines between bonded team members. Opacity reflects how strongly the
+  // pair coordinates (bond value), so the player sees relationships forming.
+  _drawBonds(sim) {
+    if (!this.showBonds) return;
+    const ctx = this.ctx;
+    const alive = sim.playerUnits.filter(u => u.alive);
+    const cap = CONFIG.synergy.bondCap;
+    for (let i = 0; i < alive.length; i++) {
+      for (let j = i + 1; j < alive.length; j++) {
+        const a = alive[i], b = alive[j];
+        const bond = sim._getBond(a, b);
+        if (bond <= 0) continue;
+        const pa = this._toScreen(a.pos);
+        const pb = this._toScreen(b.pos);
+        ctx.strokeStyle = '#4ade80';
+        ctx.lineWidth = 2;
+        ctx.globalAlpha = Math.min(1, bond / cap);
+        ctx.beginPath();
+        ctx.moveTo(pa.x, pa.y);
+        ctx.lineTo(pb.x, pb.y);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+    }
   }
 
   _drawRoom(sim) {
@@ -110,22 +138,27 @@ export class Renderer {
       const s = u.size * this.scale;
       ctx.fillStyle = u.def.color;
 
+      // Rotate the shape to face the unit's smoothed heading.
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate(u.facing ?? 0);
+
       switch (u.def.shape) {
         case 'square':
-          ctx.fillRect(p.x - s / 2, p.y - s / 2, s, s);
+          ctx.fillRect(-s / 2, -s / 2, s, s);
           break;
         case 'triangle': {
           ctx.beginPath();
-          ctx.moveTo(p.x, p.y - s / 2);
-          ctx.lineTo(p.x - s / 2, p.y + s / 2);
-          ctx.lineTo(p.x + s / 2, p.y + s / 2);
+          ctx.moveTo(0, -s / 2);
+          ctx.lineTo(-s / 2, s / 2);
+          ctx.lineTo(s / 2, s / 2);
           ctx.closePath();
           ctx.fill();
           break;
         }
         case 'circle': {
           ctx.beginPath();
-          ctx.arc(p.x, p.y, s / 2, 0, Math.PI * 2);
+          ctx.arc(0, 0, s / 2, 0, Math.PI * 2);
           ctx.fill();
           // Cross for healers.
           if (u.def.attack && u.def.attack.type === 'heal') {
@@ -133,15 +166,16 @@ export class Renderer {
             ctx.lineWidth = 2;
             const c = s * 0.25;
             ctx.beginPath();
-            ctx.moveTo(p.x - c, p.y);
-            ctx.lineTo(p.x + c, p.y);
-            ctx.moveTo(p.x, p.y - c);
-            ctx.lineTo(p.x, p.y + c);
+            ctx.moveTo(-c, 0);
+            ctx.lineTo(c, 0);
+            ctx.moveTo(0, -c);
+            ctx.lineTo(0, c);
             ctx.stroke();
           }
           break;
         }
       }
+      ctx.restore();
 
       // Taunted marker: orange ring around bats forced to target the tank.
       if (u.taunted) {
