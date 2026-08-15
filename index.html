@@ -87,10 +87,10 @@
 
     #member-list {
       display: flex; gap: 8px; align-items: flex-start;
-      overflow-x: auto; padding-bottom: 4px;
+      flex-wrap: wrap; padding-bottom: 4px;
     }
     #member-list .mcard {
-      flex: 1 1 0; min-width: 240px;
+      flex: 1 1 240px; max-width: 420px;
     }
     .mcard {
       background: #1e1e26; border: 1px solid #2a2a35; border-radius: 8px;
