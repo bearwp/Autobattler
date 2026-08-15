@@ -10,6 +10,12 @@ export class Renderer {
     this.offset = { x: 0, y: 0 };
     this._resize();
     window.addEventListener('resize', () => this._resize());
+    // Re-fit whenever the canvas element's layout size changes (e.g. the
+    // customizer grows/shrinks), not just on window resize.
+    if (typeof ResizeObserver !== 'undefined') {
+      this._ro = new ResizeObserver(() => this._resize());
+      this._ro.observe(canvas);
+    }
   }
 
   _resize() {
@@ -71,8 +77,15 @@ export class Renderer {
 
     // Doors (gaps in wall, colored outline).
     for (const door of [CONFIG.doors.entrance, CONFIG.doors.exit]) {
-      const d1 = this._toScreen({ x: door.x - door.width / 2, y: door.y });
-      const d2 = this._toScreen({ x: door.x + door.width / 2, y: door.y });
+      const vertical = door.orientation === 'vertical';
+      const d1 = this._toScreen({
+        x: vertical ? door.x : door.x - door.width / 2,
+        y: vertical ? door.y - door.width / 2 : door.y,
+      });
+      const d2 = this._toScreen({
+        x: vertical ? door.x : door.x + door.width / 2,
+        y: vertical ? door.y + door.width / 2 : door.y,
+      });
       ctx.strokeStyle = '#facc15';
       ctx.lineWidth = 3;
       ctx.beginPath();
@@ -94,7 +107,7 @@ export class Renderer {
     for (const u of sim.units) {
       if (!u.alive) continue;
       const p = this._toScreen(u.pos);
-      const s = u.def.size * this.scale;
+      const s = u.size * this.scale;
       ctx.fillStyle = u.def.color;
 
       switch (u.def.shape) {
@@ -114,8 +127,8 @@ export class Renderer {
           ctx.beginPath();
           ctx.arc(p.x, p.y, s / 2, 0, Math.PI * 2);
           ctx.fill();
-          // Cross for healer.
-          if (u.role === 'healer') {
+          // Cross for healers.
+          if (u.def.attack && u.def.attack.type === 'heal') {
             ctx.strokeStyle = '#ef4444';
             ctx.lineWidth = 2;
             const c = s * 0.25;
@@ -201,6 +214,16 @@ export class Renderer {
           ctx.lineTo(b.x, b.y);
           ctx.stroke();
           ctx.setLineDash([]);
+          break;
+        }
+        case 'aoe': {
+          const p = this._toScreen(fx.pos);
+          const r = fx.radius * this.scale;
+          ctx.strokeStyle = '#fbbf24';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+          ctx.stroke();
           break;
         }
         case 'attack': {

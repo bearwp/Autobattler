@@ -60,6 +60,138 @@
     }
     .member .hpfill { height: 100%; background: #4ade80; transition: width 0.1s; }
 
+    /* Customizer */
+    #customizer {
+      flex: 0 0 auto;
+      display: flex; flex-direction: column; gap: 10px;
+      padding: 10px 16px; background: #12121a;
+      border-top: 1px solid #2a2a35;
+      max-height: 45vh; overflow-y: auto;
+    }
+    #customizer .toolbar {
+      display: flex; gap: 8px; align-items: center;
+      position: sticky; top: 0; background: #12121a; padding: 4px 0; z-index: 1;
+    }
+    #customizer .toolbar h3 { margin: 0; font-size: 13px; color: #aaa; flex: 1; }
+    #customizer .toolbar button {
+      background: #2a2a35; color: #e0e0e0; border: 1px solid #3a3a45;
+      padding: 5px 12px; border-radius: 6px; cursor: pointer; font-size: 12px;
+    }
+    #customizer .toolbar button:hover { background: #3a3a45; }
+    #customizer .toolbar button.primary { background: #1d4ed8; border-color: #2563eb; }
+    #customizer .toolbar button.primary:hover { background: #2563eb; }
+    #customizer.collapsed #member-list { display: none; }
+    #customizer.collapsed { max-height: none; }
+
+    #member-list {
+      display: flex; gap: 8px; align-items: flex-start;
+      overflow-x: auto; padding-bottom: 4px;
+    }
+    #member-list .mcard {
+      flex: 1 1 0; min-width: 240px;
+    }
+    .mcard {
+      background: #1e1e26; border: 1px solid #2a2a35; border-radius: 8px;
+      padding: 6px 8px; display: flex; flex-direction: column; gap: 6px;
+    }
+    .mcard .mhead {
+      display: flex; align-items: center; gap: 6px; cursor: pointer;
+      user-select: none;
+    }
+    .mcard .mhead .icon { width: 20px; height: 20px; flex: 0 0 auto; }
+    .mcard .mname {
+      flex: 0 0 auto; width: 90px; background: #16161d; color: #e0e0e0;
+      border: 1px solid #2a2a35; border-radius: 4px; padding: 3px 6px;
+      font-size: 12px; font-weight: 600;
+    }
+    .mcard .msummary {
+      flex: 1; font-size: 10px; color: #777; white-space: nowrap;
+      overflow: hidden; text-overflow: ellipsis;
+    }
+    .mcard .mremove {
+      background: #3a1d1d; color: #f87171; border: 1px solid #5a2a2a;
+      border-radius: 4px; cursor: pointer; width: 20px; height: 20px; line-height: 1;
+      font-size: 14px; flex: 0 0 auto;
+    }
+    .mcard .mremove:hover { background: #5a2a2a; }
+    .mcard .mdup {
+      background: #1d2a3a; color: #7dd3fc; border: 1px solid #2a4a6a;
+      border-radius: 4px; cursor: pointer; width: 20px; height: 20px; line-height: 1;
+      font-size: 13px; flex: 0 0 auto;
+    }
+    .mcard .mdup:hover { background: #2a4a6a; }
+
+    .mcard .mbody { display: flex; flex-direction: column; gap: 5px; }
+    .mcard.collapsed .mbody { display: none; }
+
+    .mcard .row { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+    .mcard .row input[type="color"] { width: 22px; height: 22px; border: none; background: none; padding: 0; cursor: pointer; }
+    .mcard .row select {
+      background: #16161d; color: #e0e0e0; border: 1px solid #2a2a35;
+      border-radius: 4px; padding: 2px 4px; font-size: 11px;
+    }
+    .mcard .stat { display: inline-flex; align-items: center; gap: 2px; }
+    .mcard .stat i { font-style: normal; font-size: 9px; color: #666; }
+    .mcard .stat input {
+      width: 38px; background: #16161d; color: #e0e0e0;
+      border: 1px solid #2a2a35; border-radius: 4px; padding: 2px 3px; font-size: 11px;
+    }
+
+    /* Chip-based components */
+    .chip {
+      display: inline-flex; align-items: center; gap: 5px;
+      background: #16161d; border: 1px solid #2a2a35; border-radius: 6px;
+      padding: 3px 6px; font-size: 11px; color: #e0e0e0;
+    }
+    .chip .chip-emoji { font-size: 12px; }
+    .chip select {
+      background: #1e1e26; color: #e0e0e0; border: 1px solid #2a2a35;
+      border-radius: 4px; padding: 2px 3px; font-size: 11px;
+    }
+    .chip .chip-num { display: inline-flex; align-items: center; gap: 2px; color: #888; font-size: 10px; }
+    .chip .chip-num input {
+      width: 38px; background: #1e1e26; color: #e0e0e0;
+      border: 1px solid #2a2a35; border-radius: 4px; padding: 2px 3px; font-size: 11px;
+    }
+    .chip.atk { border-color: #3a3a55; }
+    .chip.tgt { border-color: #3a4a3a; }
+    .chip.move { border-color: #4a3a3a; }
+
+    .mod-row { display: flex; align-items: center; gap: 5px; }
+    .mod-chips { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+    .chip.mod {
+      background: #1d2a3a; border-color: #2a4a6a; color: #7dd3fc;
+      padding: 2px 6px; border-radius: 12px; font-size: 10px;
+    }
+    .chip.mod .chip-x {
+      background: none; border: none; color: #7dd3fc; cursor: pointer;
+      font-size: 12px; line-height: 1; padding: 0 0 0 2px;
+    }
+    .chip.mod .chip-x:hover { color: #f87171; }
+    .add-mod {
+      background: #2a2a35; color: #e0e0e0; border: 1px dashed #3a3a45;
+      border-radius: 12px; cursor: pointer; width: 18px; height: 18px;
+      line-height: 1; font-size: 12px;
+    }
+    .add-mod:hover { background: #3a3a45; }
+
+    .leader-toggle { display: inline-flex; align-items: center; gap: 3px; font-size: 10px; color: #aaa; }
+
+    /* Modifier picker popup */
+    .mod-picker {
+      position: fixed; z-index: 100; background: #1e1e26;
+      border: 1px solid #3a3a45; border-radius: 8px; padding: 4px;
+      display: flex; flex-direction: column; gap: 2px; min-width: 200px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+    }
+    .mod-picker-item {
+      display: flex; flex-direction: column; align-items: flex-start; gap: 1px;
+      background: none; border: none; color: #e0e0e0; text-align: left;
+      padding: 6px 8px; border-radius: 6px; cursor: pointer; font-size: 12px;
+    }
+    .mod-picker-item:hover { background: #2a2a35; }
+    .mod-picker-item span { font-size: 10px; color: #888; }
+
     @media (max-width: 600px) {
       #hud { flex-wrap: wrap; gap: 8px; }
       .member { min-width: 100px; padding: 5px 8px; }
@@ -77,6 +209,15 @@
     </div>
     <div id="canvas-wrap">
       <canvas id="game"></canvas>
+    </div>
+    <div id="customizer" class="collapsed">
+      <div class="toolbar">
+        <h3>Customize your team</h3>
+        <button id="btn-add-member">+ Add member</button>
+        <button id="btn-apply" class="primary">Apply</button>
+        <button id="btn-toggle-customizer" title="Show/hide customizer">Show</button>
+      </div>
+      <div id="member-list"></div>
     </div>
     <div id="team-ui"></div>
   </div>

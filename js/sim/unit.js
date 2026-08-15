@@ -9,17 +9,24 @@ let NEXT_ID = 1;
 export class Unit {
   constructor(def, opts = {}) {
     this.id = NEXT_ID++;
-    this.def = def;                 // reference to CONFIG.units.* or CONFIG.bat
+    this.def = def;                 // member bundle (CONFIG.members[i]) or CONFIG.bat
     this.team = opts.team;          // 'player' | 'enemy'
-    this.role = opts.role;          // 'tank' | 'soldier' | 'archer' | 'healer' | 'bat'
+    this.isBat = opts.team === 'enemy';
     this.pos = { ...opts.pos };
     this.vel = { x: 0, y: 0 };
-    this.hp = def.hp;
-    this.maxHp = def.hp;
+
+    // Stats come from def.stats (members) or def directly (bat).
+    const stats = def.stats || def;
+    this.hp = stats.hp;
+    this.maxHp = stats.hp;
+    this.armor = stats.armor ?? 0;
+    this.speed = stats.speed;
+    this.size = stats.size ?? 0.5;
     this.alive = true;
 
     // Combat
-    this.attackTimer = 0;           // counts down to next attack
+    this.attackTimer = 0;           // counts down to next primary attack
+    this.secondaryTimer = 0;        // counts down to next secondary attack
     this.target = null;             // Unit reference
     this.threat = new Map();        // enemyId -> threat value
 
@@ -28,15 +35,20 @@ export class Unit {
     this.path = null;               // array of waypoints (ground units)
     this.pathIndex = 0;
     this.tauntTimer = 0;
-    this.healTimer = 0;
+    this.taunted = false;
     this.kiteTimer = 0;
-    this.abilityTimer = 0;          // cooldown for role ability (taunt/cleave/pierce)
+    this.slowTimer = 0;
   }
 
-  get speed() { return this.def.speed; }
-  get range() { return this.def.range; }
-  get atk() { return this.def.atk; }
-  get armor() { return this.def.armor; }
+  // Convenience accessors for member attributes.
+  get attack() { return this.def.attack; }
+  get targetRule() { return this.def.target; }
+  get movement() { return this.def.movement; }
+  get isLeader() { return !!this.def.leader; }
+  get modifiers() { return this.def.modifiers || []; }
+
+  // Effective speed, halved while slowed.
+  get effSpeed() { return this.slowTimer > 0 ? this.speed * 0.5 : this.speed; }
 
   isEnemy(other) { return other.team !== this.team; }
 
@@ -70,7 +82,7 @@ export class Unit {
   }
 }
 
-// --- Targeting helpers (role-specific) ---
+// --- Targeting helpers (rule-based, generic) ---
 
 export function nearestEnemy(unit, enemies) {
   let best = null, bestD = Infinity;
@@ -82,6 +94,20 @@ export function nearestEnemy(unit, enemies) {
   return best;
 }
 
+// Pick the enemy that is currently targeting (threatening) this unit, i.e. the
+// one with the highest threat toward it. Falls back to the strongest enemy if
+// no threat has been recorded yet.
+export function threatenedEnemy(unit, enemies) {
+  let best = null, bestVal = 0;
+  for (const e of enemies) {
+    if (!e.alive) continue;
+    const v = unit.threat.get(e.id) ?? 0;
+    if (v > bestVal) { bestVal = v; best = e; }
+  }
+  if (best) return best;
+  return strongestEnemy(unit, enemies);
+}
+
 export function lowestHpEnemy(unit, enemies, maxRange = Infinity) {
   let best = null, bestHp = Infinity;
   for (const e of enemies) {
@@ -90,6 +116,73 @@ export function lowestHpEnemy(unit, enemies, maxRange = Infinity) {
     if (e.hp < bestHp) { bestHp = e.hp; best = e; }
   }
   return best;
+}
+
+export function highestHpEnemy(unit, enemies, maxRange = Infinity) {
+  let best = null, bestHp = -Infinity;
+  for (const e of enemies) {
+    if (!e.alive) continue;
+    if (dist(unit.pos, e.pos) > maxRange) continue;
+    if (e.hp > bestHp) { bestHp = e.hp; best = e; }
+  }
+  return best;
+}
+
+// Attack power of a unit: members store it under def.attack.atk, bats under def.atk.
+function unitAtk(e) {
+  return e.def.attack ? e.def.attack.atk : e.def.atk;
+}
+
+export function strongestEnemy(unit, enemies, maxRange = Infinity) {
+  let best = null, bestAtk = -Infinity;
+  for (const e of enemies) {
+    if (!e.alive) continue;
+    if (dist(unit.pos, e.pos) > maxRange) continue;
+    if (unitAtk(e) > bestAtk) { bestAtk = unitAtk(e); best = e; }
+  }
+  return best;
+}
+
+export function weakestEnemy(unit, enemies, maxRange = Infinity) {
+  let best = null, bestAtk = Infinity;
+  for (const e of enemies) {
+    if (!e.alive) continue;
+    if (dist(unit.pos, e.pos) > maxRange) continue;
+    if (unitAtk(e) < bestAtk) { bestAtk = unitAtk(e); best = e; }
+  }
+  return best;
+}
+
+// "most-at-once": the target whose position lets an AOE hit the most enemies.
+export function mostAtOnceEnemy(unit, enemies, maxRange = Infinity) {
+  let best = null, bestCount = -1;
+  for (const e of enemies) {
+    if (!e.alive) continue;
+    if (dist(unit.pos, e.pos) > maxRange) continue;
+    let count = 0;
+    for (const o of enemies) {
+      if (!o.alive) continue;
+      if (dist(e.pos, o.pos) <= 2.0) count++;
+    }
+    if (count > bestCount) { bestCount = count; best = e; }
+  }
+  return best;
+}
+
+// Pick a target for a member using its configured target rule.
+export function pickTarget(unit, candidates, maxRange = Infinity) {
+  if (candidates.length === 0) return null;
+  const rule = unit.targetRule.rule;
+  switch (rule) {
+    case 'lowestHp':   return lowestHpEnemy(unit, candidates, maxRange);
+    case 'highestHp':  return highestHpEnemy(unit, candidates, maxRange);
+    case 'strongest':  return strongestEnemy(unit, candidates, maxRange);
+    case 'weakest':    return weakestEnemy(unit, candidates, maxRange);
+    case 'mostAtOnce': return mostAtOnceEnemy(unit, candidates, maxRange);
+    case 'threatened': return threatenedEnemy(unit, candidates);
+    case 'closest':
+    default:           return nearestEnemy(unit, candidates);
+  }
 }
 
 export function lowestHpAlly(unit, allies) {

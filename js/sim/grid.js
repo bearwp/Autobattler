@@ -50,7 +50,12 @@ export class Grid {
   }
 
   _inDoor(cx, cy, door) {
-    // Door is a horizontal gap in the top/bottom wall.
+    // Door is a gap in a wall. Vertical doors are on the left/right wall;
+    // horizontal doors are on the top/bottom wall.
+    if (door.orientation === 'vertical') {
+      return Math.abs(cy - door.y) <= door.width / 2 &&
+             Math.abs(cx - door.x) <= 0.6;
+    }
     return Math.abs(cx - door.x) <= door.width / 2 &&
            Math.abs(cy - door.y) <= 0.6;
   }
