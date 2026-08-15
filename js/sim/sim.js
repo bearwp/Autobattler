@@ -14,12 +14,22 @@ export class Sim {
     this.enemyUnits = [];
     this.time = 0;
     this.started = false;
-    this.over = false;        // 'win' | 'lose' | null
+    this.over = null;         // 'win' | 'lose' | null
+    this.level = 1;
     this.effects = [];        // transient visual effects (read by renderer)
+    this._spawnQueue = [];    // team members waiting to enter the room
+    this.deadRoles = new Set(); // roles that died this run (perma-death)
     this._reset();
   }
 
   _reset() {
+    this.level = 1;
+    this.deadRoles = new Set();
+    this._startLevel();
+  }
+
+  // Set up a fresh level: spawn bats and queue the team to enter one by one.
+  _startLevel() {
     this.units = [];
     this.playerUnits = [];
     this.enemyUnits = [];
@@ -27,34 +37,33 @@ export class Sim {
     this.started = false;
     this.over = null;
     this.effects = [];
-    this._spawnTeam();
+    this._spawnQueue = [];
+    this._queueTeam();
     this._spawnBats();
   }
 
-  _spawnTeam() {
+  // Team enters through the bottom door one by one.
+  _queueTeam() {
     const { entrance } = CONFIG.doors;
-    // Team enters through the top door, spread slightly.
-    const spawns = [
-      { role: 'tank',    pos: { x: entrance.x, y: 2.0 } },
-      { role: 'soldier', pos: { x: entrance.x - 1.2, y: 2.6 } },
-      { role: 'archer',  pos: { x: entrance.x + 1.2, y: 2.6 } },
-      { role: 'healer',  pos: { x: entrance.x, y: 3.4 } },
-    ];
-    for (const s of spawns) {
-      const u = new Unit(CONFIG.units[s.role], { team: 'player', role: s.role, pos: s.pos });
-      this.units.push(u);
-      this.playerUnits.push(u);
-    }
+    const order = ['tank', 'soldier', 'archer', 'healer'];
+    const gap = 0.8; // seconds between each member entering
+    // Skip members that died in a previous level (perma-death).
+    const alive = order.filter(role => !this.deadRoles.has(role));
+    this._spawnQueue = alive.map((role, i) => ({
+      role,
+      pos: { x: entrance.x, y: entrance.y - 0.5 },
+      at: i * gap,
+    }));
   }
 
   _spawnBats() {
     const { width, height } = CONFIG.world;
-    const n = CONFIG.bat.count;
+    const n = CONFIG.bat.count + (this.level - 1) * CONFIG.bat.countPerLevel;
     for (let i = 0; i < n; i++) {
-      // Bats spawn in the lower half, spread out.
+      // Bats spawn spread across the room.
       const pos = {
         x: 3 + Math.random() * (width - 6),
-        y: height * 0.55 + Math.random() * (height * 0.4),
+        y: 2 + Math.random() * (height - 4),
       };
       const u = new Unit(CONFIG.bat, { team: 'enemy', role: 'bat', pos });
       this.units.push(u);
@@ -76,13 +85,28 @@ export class Sim {
     if (!this.started || this.over) return;
     this.time += dt;
 
+    // Release queued team members as their entry time arrives.
+    while (this._spawnQueue.length > 0 && this._spawnQueue[0].at <= this.time) {
+      const s = this._spawnQueue.shift();
+      const u = new Unit(CONFIG.units[s.role], { team: 'player', role: s.role, pos: s.pos });
+      this.units.push(u);
+      this.playerUnits.push(u);
+    }
+
     for (const u of this.units) {
       if (!u.alive) continue;
       u.attackTimer -= dt;
       u.tauntTimer = Math.max(0, u.tauntTimer - dt);
+      if (u.tauntTimer <= 0) u.taunted = false;
       u.healTimer = Math.max(0, u.healTimer - dt);
       u.kiteTimer = Math.max(0, u.kiteTimer - dt);
       u.abilityTimer = Math.max(0, u.abilityTimer - dt);
+      // Decay threat so taunt/heal aggro fades over time.
+      for (const [id, v] of u.threat) {
+        const nv = v - dt * CONFIG.threat.decayPerSec;
+        if (nv <= 0) u.threat.delete(id);
+        else u.threat.set(id, nv);
+      }
     }
 
     // Age out expired effects.
@@ -113,6 +137,10 @@ export class Sim {
         this.effects.push({
           type: 'death', pos: { ...u.pos }, color: u.def.color, life: 0.4,
         });
+        // Record perma-death for team members.
+        if (u.team === 'player') {
+          this.deadRoles.add(u.role);
+        }
       }
     }
 
@@ -126,20 +154,34 @@ export class Sim {
     u.pos.y = clamp(u.pos.y, wall, height - wall);
   }
 
+  _exitGoal() {
+    return { x: CONFIG.doors.exit.x, y: CONFIG.doors.exit.y + 0.5 };
+  }
+
   _checkEnd() {
+    // Lose: all team members dead and none left to enter.
+    if (this._spawnQueue.length === 0 && this.playerUnits.every(u => !u.alive)) {
+      this.over = 'lose';
+      return;
+    }
+
+    // Advance: all mobs cleared AND a team member reaches the exit door.
+    const mobsCleared = this.enemyUnits.every(e => !e.alive);
+    if (!mobsCleared) return;
     const { exit } = CONFIG.doors;
-    // Win: any team member reaches exit.
     for (const u of this.playerUnits) {
       if (!u.alive) continue;
-      if (Math.abs(u.pos.x - exit.x) <= exit.width / 2 && u.pos.y >= exit.y - 0.5) {
-        this.over = 'win';
+      if (Math.abs(u.pos.x - exit.x) <= exit.width / 2 && u.pos.y <= exit.y + 0.5) {
+        this._nextLevel();
         return;
       }
     }
-    // Lose: all team members dead.
-    if (this.playerUnits.every(u => !u.alive)) {
-      this.over = 'lose';
-    }
+  }
+
+  _nextLevel() {
+    this.level += 1;
+    this._startLevel();
+    this.started = true; // continue playing into the next level
   }
 
   // --- Player unit AI ---
@@ -157,28 +199,25 @@ export class Sim {
   }
 
   _aiTank(u, enemies, allies, dt) {
-    // Tank advances toward the exit, but stops to fight enemies that get close
-    // so it can't simply sprint past the swarm.
-    const target = nearestEnemy(u, enemies);
-
     // Taunt: periodically force nearby enemies to target the tank.
     if (u.abilityTimer <= 0 && enemies.length > 0) {
       this._taunt(u, enemies);
     }
 
-    if (target && dist(u.pos, target.pos) <= u.range) {
-      this._attack(u, target);
-      u.vel = { x: 0, y: 0 };
-      return;
-    }
-    if (target && dist(u.pos, target.pos) < 3) {
-      // Engage: move toward the enemy to bring it into melee range.
+    const target = nearestEnemy(u, enemies);
+    if (target) {
+      if (dist(u.pos, target.pos) <= u.range) {
+        this._attack(u, target);
+        u.vel = { x: 0, y: 0 };
+        return;
+      }
+      // Engage the nearest enemy.
       this._moveAlongPath(u, target.pos, dt);
       this._separate(u, allies, dt);
       return;
     }
-    const goal = { x: CONFIG.doors.exit.x, y: CONFIG.doors.exit.y - 0.5 };
-    this._moveAlongPath(u, goal, dt);
+    // No enemies: head to the exit.
+    this._moveAlongPath(u, this._exitGoal(), dt);
     this._separate(u, allies, dt);
   }
 
@@ -189,6 +228,9 @@ export class Sim {
     for (const e of enemies) {
       if (dist(u.pos, e.pos) <= a.radius) {
         e.addThreat(u, a.threat);
+        // Mark the bat as taunted so the renderer can show it.
+        e.taunted = true;
+        e.tauntTimer = CONFIG.threat.tauntDuration;
         hit = true;
       }
     }
@@ -211,7 +253,7 @@ export class Sim {
       u.vel = { x: 0, y: 0 };
       return;
     }
-    const goal = target ? target.pos : (tank ? tank.pos : { x: CONFIG.doors.exit.x, y: CONFIG.doors.exit.y - 0.5 });
+    const goal = target ? target.pos : (tank ? tank.pos : this._exitGoal());
     this._moveAlongPath(u, goal, dt);
     this._separate(u, allies, dt);
   }
@@ -262,7 +304,7 @@ export class Sim {
       return;
     }
     // No target: advance toward exit.
-    this._moveAlongPath(u, { x: CONFIG.doors.exit.x, y: CONFIG.doors.exit.y - 0.5 }, dt);
+    this._moveAlongPath(u, this._exitGoal(), dt);
     this._separate(u, allies, dt);
   }
 
@@ -311,9 +353,9 @@ export class Sim {
       return;
     }
 
-    // Position behind the team (toward entrance side).
-    const anchor = { x: CONFIG.doors.entrance.x, y: 3 };
-    this._moveAlongPath(u, anchor, dt);
+    // No enemies: head to exit. Otherwise stay near the team.
+    const goal = enemies.length === 0 ? this._exitGoal() : { x: CONFIG.doors.entrance.x, y: CONFIG.doors.entrance.y - 2 };
+    this._moveAlongPath(u, goal, dt);
     this._separate(u, allies, dt);
   }
 
@@ -332,10 +374,11 @@ export class Sim {
     const coh = this._boidCohesion(u, others);
     const ali = this._boidAlignment(u, others);
     const seek = this._boidSeek(u, target.pos);
+    const wall = this._boidWallAvoidance(u);
 
     const b = CONFIG.boids;
-    let fx = sep.x * b.separationWeight + coh.x * b.cohesionWeight + ali.x * b.alignmentWeight + seek.x * b.seekWeight;
-    let fy = sep.y * b.separationWeight + coh.y * b.cohesionWeight + ali.y * b.alignmentWeight + seek.y * b.seekWeight;
+    let fx = sep.x * b.separationWeight + coh.x * b.cohesionWeight + ali.x * b.alignmentWeight + seek.x * b.seekWeight + wall.x * b.wallWeight;
+    let fy = sep.y * b.separationWeight + coh.y * b.cohesionWeight + ali.y * b.alignmentWeight + seek.y * b.seekWeight + wall.y * b.wallWeight;
 
     const force = clampLen({ x: fx, y: fy }, b.maxForce);
     u.vel = clampLen(add(u.vel, scale(force, dt)), u.speed);
@@ -348,15 +391,16 @@ export class Sim {
 
   _pickBatTarget(u, enemies) {
     // Score all enemies: prefer squishy (archer/healer) and low-HP, but the
-    // tank is still targetable when it is nearest. This keeps the tank from
-    // sprinting to the exit unopposed.
+    // tank is still targetable when it is nearest. Threat (from taunt) is a
+    // strong override so a taunted tank pulls aggro.
     const bias = CONFIG.threat.backlineBias;
     let best = null, bestScore = -Infinity;
     for (const e of enemies) {
       const d = dist(u.pos, e.pos);
       const hpFrac = e.hp / e.maxHp;
       const squishy = (e.role === 'archer' || e.role === 'healer') ? bias : 0;
-      const score = -d + squishy + (1 - hpFrac) * 5;
+      const threat = u.threat.get(e.id) ?? 0;
+      const score = -d + squishy + (1 - hpFrac) * 5 + threat;
       if (score > bestScore) { bestScore = score; best = e; }
     }
     return best;
@@ -370,11 +414,28 @@ export class Sim {
       const d = dist(u.pos, o.pos);
       if (d > 0 && d < b.separationRadius) {
         const diff = norm(sub(u.pos, o.pos));
-        steer = add(steer, scale(diff, 1 / d));
+        // Cap the 1/d term so overlapping bats don't produce huge forces.
+        const strength = 1 / Math.max(d, 0.2);
+        steer = add(steer, scale(diff, strength));
         count++;
       }
     }
     if (count > 0) steer = scale(steer, 1 / count);
+    return steer;
+  }
+
+  _boidWallAvoidance(u) {
+    const { width, height } = CONFIG.world;
+    const margin = 1.5; // start steering away within this distance of a wall
+    let steer = { x: 0, y: 0 };
+    const dLeft = u.pos.x;
+    const dRight = width - u.pos.x;
+    const dTop = u.pos.y;
+    const dBottom = height - u.pos.y;
+    if (dLeft < margin) steer.x += (margin - dLeft) / margin;
+    if (dRight < margin) steer.x -= (margin - dRight) / margin;
+    if (dTop < margin) steer.y += (margin - dTop) / margin;
+    if (dBottom < margin) steer.y -= (margin - dBottom) / margin;
     return steer;
   }
 

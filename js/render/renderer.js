@@ -130,6 +130,15 @@ export class Renderer {
         }
       }
 
+      // Taunted marker: orange ring around bats forced to target the tank.
+      if (u.taunted) {
+        ctx.strokeStyle = '#f59e0b';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, s / 2 + 4, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
       // Health bar.
       const bw = s * 1.2;
       const bh = 4;
