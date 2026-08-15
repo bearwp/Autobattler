@@ -270,18 +270,69 @@
     }
     #btn-finish-rest:hover { background: #2563eb; }
 
-    /* Bond legend (side panel) */
-    #bond-legend {
-      position: fixed; right: 12px; top: 60px; z-index: 150;
-      background: #1e1e26; border: 1px solid #3a3a45; border-radius: 8px;
-      padding: 10px 12px; font-size: 11px; color: #aaa;
-      display: flex; flex-direction: column; gap: 6px; min-width: 180px;
+    /* Debug side panel */
+    #debug-panel {
+      position: fixed; right: 12px; top: 60px; bottom: 12px; z-index: 150;
+      width: 300px; background: #16161d; border: 1px solid #3a3a45;
+      border-radius: 8px; display: flex; flex-direction: column;
+      overflow: hidden;
     }
-    #bond-legend.hidden { display: none; }
-    #bond-legend h4 { margin: 0; color: #e0e0e0; font-size: 12px; }
-    #bond-legend .legend-row { display: flex; align-items: center; gap: 8px; }
-    #bond-legend .swatch { width: 18px; height: 3px; border-radius: 2px; flex: 0 0 auto; }
-    #bond-legend .legend-row span { color: #888; }
+    #debug-panel.hidden { display: none; }
+    #debug-panel .dbg-head {
+      display: flex; align-items: center; gap: 8px;
+      padding: 8px 10px; border-bottom: 1px solid #2a2a35;
+      background: #1e1e26;
+    }
+    #debug-panel .dbg-head h4 { margin: 0; font-size: 12px; color: #e0e0e0; flex: 1; }
+    #debug-panel .dbg-head .dbg-play {
+      font-size: 10px; color: #4ade80; font-weight: 600;
+    }
+    #debug-panel .dbg-tabs {
+      display: flex; gap: 4px; padding: 6px 8px 0;
+      background: #1e1e26; border-bottom: 1px solid #2a2a35;
+    }
+    #debug-panel .dbg-tab {
+      background: none; border: none; color: #888; cursor: pointer;
+      font-size: 11px; padding: 4px 10px; border-radius: 6px 6px 0 0;
+    }
+    #debug-panel .dbg-tab:hover { color: #e0e0e0; }
+    #debug-panel .dbg-tab.on { color: #e0e0e0; background: #16161d; }
+    #debug-panel .dbg-body {
+      flex: 1; overflow-y: auto; padding: 6px;
+      display: flex; flex-direction: column; gap: 6px;
+    }
+    .dbg-section { font-size: 10px; color: #888; text-transform: uppercase; letter-spacing: 0.05em; margin: 2px 2px 0; }
+    .dbg-unit {
+      background: #1e1e26; border: 1px solid #2a2a35; border-radius: 6px;
+      padding: 6px 8px; font-size: 11px; display: flex; flex-direction: column; gap: 3px;
+      cursor: pointer;
+    }
+    .dbg-unit:hover { border-color: #fbbf24; }
+    .dbg-unit .dbg-name {
+      display: flex; align-items: center; gap: 6px; font-weight: 600; color: #e0e0e0;
+    }
+    .dbg-unit .dbg-name .dbg-swatch { width: 10px; height: 10px; border-radius: 2px; flex: 0 0 auto; }
+    .dbg-unit .dbg-name .dbg-team { font-size: 9px; font-weight: 400; color: #888; }
+    .dbg-unit .dbg-name .dbg-hp { margin-left: auto; font-size: 10px; font-weight: 400; }
+    .dbg-unit .dbg-hp.low { color: #f87171; }
+    .dbg-unit .dbg-hp.ok { color: #4ade80; }
+    .dbg-unit .dbg-row { display: flex; gap: 6px; color: #aaa; }
+    .dbg-unit .dbg-row b { color: #e0e0e0; font-weight: 600; min-width: 44px; }
+    .dbg-unit .dbg-intent { color: #fbbf24; }
+    .dbg-unit .dbg-target { color: #7dd3fc; }
+    .dbg-unit .dbg-goal { color: #d8b4fe; }
+    .dbg-bond {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 10px; color: #aaa; padding: 3px 2px;
+    }
+    .dbg-bond .dbg-swatch { width: 8px; height: 8px; border-radius: 2px; flex: 0 0 auto; }
+    .dbg-bond .dbg-bond-val { color: #4ade80; font-weight: 600; margin-left: auto; }
+    .dbg-empty { color: #666; font-size: 11px; padding: 8px 4px; }
+    .dbg-play-row {
+      background: #1e1e26; border: 1px solid #2a2a35; border-radius: 6px;
+      padding: 6px 8px; font-size: 11px; color: #aaa;
+    }
+    .dbg-play-row b { color: #4ade80; }
   </style>
 </head>
 <body>
@@ -290,8 +341,10 @@
       <span class="status" id="status">Ready</span>
       <button id="btn-start">Start</button>
       <button id="btn-restart">Restart</button>
-      <button id="btn-bonds" class="toggle on" title="Toggle bond visualizer">Bonds: On</button>
-      <span class="hint">Space: start &nbsp;·&nbsp; R: reset &nbsp;·&nbsp; B: bonds</span>
+      <button id="btn-debug" class="toggle" title="Toggle debug panel">Debug</button>
+      <button id="btn-plays" class="toggle" title="Toggle leader-called plays">Plays</button>
+      <button id="btn-pause" title="Pause/resume the sim">Pause</button>
+      <span class="hint">Space: start &nbsp;·&nbsp; R: reset &nbsp;·&nbsp; D: debug &nbsp;·&nbsp; P: pause</span>
     </div>
     <div id="canvas-wrap">
       <canvas id="game"></canvas>
@@ -320,10 +373,17 @@
         <button id="btn-finish-rest" class="primary">Continue</button>
       </div>
     </div>
-    <div id="bond-legend">
-      <h4>Bonds</h4>
-      <div class="legend-row"><span class="swatch" style="background:#4ade80"></span><span>Bonded members coordinate</span></div>
-      <div class="legend-row"><span class="swatch" style="background:#4ade80;opacity:0.4"></span><span>Stronger line = closer bond</span></div>
+    <div id="debug-panel" class="hidden">
+      <div class="dbg-head">
+        <h4>Debug</h4>
+        <span class="dbg-play" id="dbg-play"></span>
+      </div>
+      <div class="dbg-tabs">
+        <button class="dbg-tab on" data-tab="units">Units</button>
+        <button class="dbg-tab" data-tab="bonds">Bonds</button>
+        <button class="dbg-tab" data-tab="plays">Plays</button>
+      </div>
+      <div class="dbg-body" id="dbg-body"></div>
     </div>
   </div>
   <script type="module" src="./js/main.js"></script>

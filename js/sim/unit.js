@@ -26,6 +26,18 @@ export class Unit {
     this.size = stats.size ?? 0.5;
     this.alive = true;
 
+    // Mana: only units with a `mana` stat (e.g. the healer) use it. It only
+    // refills when the team rests, so a healer can't spam heals forever. The
+    // current value persists on the member def so it carries across rooms.
+    this.maxMana = stats.mana ? stats.mana.max : 0;
+    this.manaCost = stats.mana ? stats.mana.cost : 0;
+    if (stats.mana) {
+      if (typeof stats.mana.current !== 'number') stats.mana.current = stats.mana.max;
+      this.mana = stats.mana.current;
+    } else {
+      this.mana = 0;
+    }
+
     // Combat
     this.attackTimer = 0;           // counts down to next primary attack
     this.secondaryTimer = 0;        // counts down to next secondary attack
@@ -34,6 +46,8 @@ export class Unit {
 
     // AI
     this.state = 'idle';
+    this.intent = '';               // human-readable "what am I doing" (debug overlay)
+    this.slot = 0;                  // formation slot index (spreads followers out)
     this.path = null;               // array of waypoints (ground units)
     this.pathIndex = 0;
     this.pathGoal = null;           // goal the current path was computed for
@@ -44,6 +58,8 @@ export class Unit {
     this.kiteTimer = 0;
     this.slowTimer = 0;
     this.chargeReady = false;
+    this.speakCooldown = 0;   // per-unit throttle for dialogue lines
+    this.thinkTimer = 0;      // counts down to the next occasional "thinking" line
   }
 
   // Convenience accessors for member attributes.
@@ -59,16 +75,19 @@ export class Unit {
 
   isEnemy(other) { return other.team !== this.team; }
 
+  // Display name: the member's configured name, or a fallback for enemies.
+  get displayName() { return this.def.name || (this.def.kind || 'unit'); }
+
   takeDamage(amount) {
     const dmg = Math.max(CONFIG.combat.minDamage, amount - this.armor);
     this.hp -= dmg;
+    this._tookDamage = true;
     if (this.hp <= 0) {
       this.hp = 0;
       this.alive = false;
     }
     return dmg;
-  }
-  heal(amount) {
+  }  heal(amount) {
     this.hp = Math.min(this.maxHp, this.hp + amount);
   }
 

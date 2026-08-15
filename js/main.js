@@ -11,8 +11,12 @@ const customizerEl = document.getElementById('customizer');
 const memberListEl = document.getElementById('member-list');
 const btnStart = document.getElementById('btn-start');
 const btnRestart = document.getElementById('btn-restart');
-const btnBonds = document.getElementById('btn-bonds');
-const bondLegendEl = document.getElementById('bond-legend');
+const btnDebug = document.getElementById('btn-debug');
+const btnPlays = document.getElementById('btn-plays');
+const debugPanelEl = document.getElementById('debug-panel');
+const dbgBodyEl = document.getElementById('dbg-body');
+const dbgPlayEl = document.getElementById('dbg-play');
+const btnPause = document.getElementById('btn-pause');
 const mapOverlayEl = document.getElementById('map-overlay');
 const mapSvgEl = document.getElementById('map-svg');
 const restOverlayEl = document.getElementById('rest-overlay');
@@ -56,7 +60,7 @@ const SHAPE_LABELS = {
   rangeOneShot: 'Range one-shot', rangeAoe: 'Range AOE', meleeOneShot: 'Melee one-shot',
   meleeCone: 'Melee cone', meleeAoe: 'Melee AOE',
 };
-const MOVE_LABELS = { hold: 'Hold', keepDistance: 'Keep distance', kite: 'Kite', evade: 'Evade', follow: 'Follow', advance: 'Advance', flank: 'Flank', charge: 'Charge', guard: 'Guard', hunt: 'Hunt' };
+const MOVE_LABELS = { keepDistance: 'Keep distance', kite: 'Kite', evade: 'Evade', follow: 'Follow', advance: 'Advance', flank: 'Flank', charge: 'Charge', guard: 'Guard', hunt: 'Hunt' };
 const RULE_LABELS = { lowestHp: 'Lowest HP', highestHp: 'Highest HP', closest: 'Closest', strongest: 'Strongest', weakest: 'Weakest', mostAtOnce: 'Most at once', threatened: 'Threatened' };
 
 function modifierChips(mods) {
@@ -398,6 +402,7 @@ function frame(now) {
   updateHud();
   updateTeamUi();
   updateMap();
+  updateDebug();
   updateRest();
   requestAnimationFrame(frame);
 }
@@ -447,14 +452,182 @@ function updateTeamUi() {
 btnStart.addEventListener('click', () => sim.start());
 btnRestart.addEventListener('click', () => sim.reset());
 
-// Toggle the bond visualizer (button + B key stay in sync).
-function setBonds(on) {
-  renderer.showBonds = on;
-  btnBonds.textContent = on ? 'Bonds: On' : 'Bonds: Off';
-  btnBonds.classList.toggle('on', on);
-  bondLegendEl.classList.toggle('hidden', !on);
+// --- Debug panel ---
+
+const PLAY_LABELS = {
+  focus: 'Focus fire',
+  backline: 'Focus backline',
+  retreat: 'Retreat',
+  hold: 'Hold the line',
+  scatter: 'Scatter',
+};
+
+const PLAY_DESC = {
+  focus: 'Concentrate damage on one target',
+  backline: 'Focus the exposed squishy enemy',
+  retreat: 'Fall back to the exit to regroup',
+  hold: 'Dig in and defend, don\'t push',
+  scatter: 'Spread out to avoid AOE',
+};
+
+let dbgTab = 'units'; // 'units' | 'bonds' | 'plays'
+
+// Toggle the debug side panel (button + D key stay in sync).
+function setDebug(on) {
+  renderer.showDebug = on;
+  debugPanelEl.classList.toggle('hidden', !on);
+  btnDebug.classList.toggle('on', on);
+  btnDebug.textContent = on ? 'Debug: On' : 'Debug';
+  if (!on) renderer.highlightId = null;
 }
-btnBonds.addEventListener('click', () => setBonds(!renderer.showBonds));
+btnDebug.addEventListener('click', () => setDebug(!renderer.showDebug));
+
+// Leader plays toggle (off by default).
+function setPlays(on) {
+  sim.playsEnabled = on;
+  btnPlays.classList.toggle('on', on);
+  if (!on) sim.play = null;
+}
+btnPlays.addEventListener('click', () => setPlays(!sim.playsEnabled));
+
+// Tab switching.
+debugPanelEl.querySelectorAll('.dbg-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    dbgTab = tab.dataset.tab;
+    debugPanelEl.querySelectorAll('.dbg-tab').forEach(t => t.classList.toggle('on', t === tab));
+    renderer.highlightId = null;
+  });
+});
+
+// Pause/resume (button + P key stay in sync).
+function setPaused(paused) {
+  sim.paused = paused;
+  btnPause.textContent = paused ? 'Resume' : 'Pause';
+  btnPause.classList.toggle('on', paused);
+}
+btnPause.addEventListener('click', () => setPaused(!sim.paused));
+
+// Rebuild the debug panel contents each frame. Only the active tab is
+// rendered, so the list stays focused and doesn't flicker.
+function updateDebug() {
+  if (!renderer.showDebug) return;
+
+  // Leader's active play (always shown in the header).
+  if (sim.play) {
+    const target = sim.units.find(x => x.id === sim.play.targetId);
+    const label = PLAY_LABELS[sim.play.type] || sim.play.type;
+    dbgPlayEl.textContent = target
+      ? `Play: ${label} → ${target.def.name || 'target'}`
+      : `Play: ${label}`;
+  } else {
+    dbgPlayEl.textContent = '';
+  }
+
+  if (dbgTab === 'units') renderDebugUnits();
+  else if (dbgTab === 'bonds') renderDebugBonds();
+  else renderDebugPlays();
+}
+
+function renderDebugUnits() {
+  const team = sim.playerUnits.filter(u => u.alive);
+  const enemies = sim.enemyUnits.filter(e => e.alive);
+  let html = '';
+
+  if (team.length) {
+    html += '<div class="dbg-section">Team</div>';
+    for (const u of team) html += unitCard(u);
+  }
+  if (enemies.length) {
+    html += '<div class="dbg-section">Enemies</div>';
+    for (const u of enemies) html += unitCard(u);
+  }
+  if (!team.length && !enemies.length) {
+    html = '<div class="dbg-empty">No units alive</div>';
+  }
+  dbgBodyEl.innerHTML = html;
+
+  // Hover a card to highlight the matching unit on the canvas.
+  dbgBodyEl.querySelectorAll('.dbg-unit').forEach(card => {
+    card.addEventListener('mouseenter', () => {
+      renderer.highlightId = parseInt(card.dataset.id, 10);
+    });
+    card.addEventListener('mouseleave', () => {
+      if (renderer.highlightId === parseInt(card.dataset.id, 10)) renderer.highlightId = null;
+    });
+  });
+}
+
+function unitCard(u) {
+  const hpFrac = u.hp / u.maxHp;
+  const hpCls = hpFrac <= 0.25 ? 'dbg-hp low' : 'dbg-hp ok';
+  const targetName = u.target && u.target.alive ? (u.target.def.name || 'target') : '—';
+  const goal = u.path && u.path.length ? u.path[u.path.length - 1] : null;
+  const goalTxt = goal ? `(${goal.x.toFixed(1)}, ${goal.y.toFixed(1)})` : '—';
+  return `
+    <div class="dbg-unit" data-id="${u.id}">
+      <div class="dbg-name">
+        <span class="dbg-swatch" style="background:${u.def.color}"></span>
+        ${u.def.name || 'unit'}
+        <span class="dbg-team">${u.team === 'player' ? 'team' : 'enemy'}</span>
+        <span class="${hpCls}">${Math.round(u.hp)}/${u.maxHp}</span>
+      </div>
+      <div class="dbg-row"><b>Intent</b><span class="dbg-intent">${u.intent || '—'}</span></div>
+      <div class="dbg-row"><b>Target</b><span class="dbg-target">${targetName}</span></div>
+      <div class="dbg-row"><b>Goal</b><span class="dbg-goal">${goalTxt}</span></div>
+    </div>`;
+}
+
+function renderDebugBonds() {
+  const alive = sim.playerUnits.filter(u => u.alive);
+  const pairs = [];
+  for (let i = 0; i < alive.length; i++) {
+    for (let j = i + 1; j < alive.length; j++) {
+      const bond = sim._getBond(alive[i], alive[j]);
+      if (bond <= 0) continue;
+      pairs.push({ a: alive[i], b: alive[j], bond });
+    }
+  }
+  pairs.sort((x, y) => y.bond - x.bond);
+
+  let html = '<div class="dbg-section">Pair bonds</div>';
+  if (pairs.length === 0) {
+    html += '<div class="dbg-empty">No bonds yet — members bond by fighting together</div>';
+  } else {
+    for (const p of pairs) {
+      html += `
+        <div class="dbg-bond">
+          <span class="dbg-swatch" style="background:${p.a.def.color}"></span>
+          ${p.a.def.name || 'unit'}
+          <span class="dbg-swatch" style="background:${p.b.def.color}"></span>
+          ${p.b.def.name || 'unit'}
+          <span class="dbg-bond-val">${Math.round(p.bond)}</span>
+        </div>`;
+    }
+  }
+  dbgBodyEl.innerHTML = html;
+}
+
+function renderDebugPlays() {
+  let html = '<div class="dbg-section">Leader plays</div>';
+  if (!sim.play) {
+    html += '<div class="dbg-empty">No active play</div>';
+  } else {
+    const target = sim.units.find(x => x.id === sim.play.targetId);
+    const label = PLAY_LABELS[sim.play.type] || sim.play.type;
+    const desc = PLAY_DESC[sim.play.type] || '';
+    const targetTxt = target ? ` → ${target.def.name || 'target'}` : '';
+    const remain = Math.max(0, sim.play.until - sim.time).toFixed(1);
+    html += `
+      <div class="dbg-play-row">
+        <b>${label}</b>${targetTxt}
+        <div>${desc}</div>
+        <div>${remain}s remaining</div>
+      </div>`;
+  }
+  html += '<div class="dbg-section">Priority</div>';
+  html += '<div class="dbg-play-row">Retreat → Hold → Scatter → Backline → Focus</div>';
+  dbgBodyEl.innerHTML = html;
+}
 
 // --- Map overlay ---
 
@@ -589,8 +762,10 @@ window.addEventListener('keydown', (e) => {
     sim.start();
   } else if (e.code === 'KeyR') {
     sim.reset();
-  } else if (e.code === 'KeyB') {
-    setBonds(!renderer.showBonds);
+  } else if (e.code === 'KeyD') {
+    setDebug(!renderer.showDebug);
+  } else if (e.code === 'KeyP') {
+    setPaused(!sim.paused);
   }
 });
 

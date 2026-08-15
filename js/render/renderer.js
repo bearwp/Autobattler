@@ -8,7 +8,8 @@ export class Renderer {
     this.ctx = canvas.getContext('2d');
     this.scale = 1;
     this.offset = { x: 0, y: 0 };
-    this.showBonds = true;      // toggle bond visualizer with the B key
+    this.showDebug = false;     // toggle intent/goal/target debug overlay with the D key
+    this.highlightId = null;    // unit id to draw a highlight ring around (debug hover)
     this._resize();
     window.addEventListener('resize', () => this._resize());
     // Re-fit whenever the canvas element's layout size changes (e.g. the
@@ -53,34 +54,66 @@ export class Renderer {
     ctx.clearRect(0, 0, w, h);
 
     this._drawRoom(sim);
-    this._drawBonds(sim);
     this._drawUnits(sim);
+    this._drawBubbles(sim);
     this._drawEffects(sim);
+    if (this.showDebug) this._drawDebug(sim);
   }
 
-  // Draw lines between bonded team members. Opacity reflects how strongly the
-  // pair coordinates (bond value), so the player sees relationships forming.
-  _drawBonds(sim) {
-    if (!this.showBonds) return;
+  // Debug overlay: shows each unit's current intent (what it's thinking), a
+  // marker at its movement goal, and a line to its attack target. Toggled with
+  // the D key. Reads sim state only; never mutates it.
+  _drawDebug(sim) {
     const ctx = this.ctx;
-    const alive = sim.playerUnits.filter(u => u.alive);
-    const cap = CONFIG.synergy.bondCap;
-    for (let i = 0; i < alive.length; i++) {
-      for (let j = i + 1; j < alive.length; j++) {
-        const a = alive[i], b = alive[j];
-        const bond = sim._getBond(a, b);
-        if (bond <= 0) continue;
-        const pa = this._toScreen(a.pos);
-        const pb = this._toScreen(b.pos);
-        ctx.strokeStyle = '#4ade80';
-        ctx.lineWidth = 2;
-        ctx.globalAlpha = Math.min(1, bond / cap);
+    for (const u of sim.units) {
+      if (!u.alive) continue;
+      const p = this._toScreen(u.pos);
+
+      // Line to the attack target.
+      if (u.target && u.target.alive) {
+        const tp = this._toScreen(u.target.pos);
+        ctx.strokeStyle = u.team === 'player' ? 'rgba(251,191,36,0.7)' : 'rgba(248,113,113,0.7)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 3]);
         ctx.beginPath();
-        ctx.moveTo(pa.x, pa.y);
-        ctx.lineTo(pb.x, pb.y);
+        ctx.moveTo(p.x, p.y);
+        ctx.lineTo(tp.x, tp.y);
         ctx.stroke();
-        ctx.globalAlpha = 1;
+        ctx.setLineDash([]);
       }
+
+      // Intent text above the unit.
+      if (u.intent) {
+        ctx.font = '11px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillStyle = 'rgba(0,0,0,0.6)';
+        const tw = ctx.measureText(u.intent).width;
+        ctx.fillRect(p.x - tw / 2 - 3, p.y - 22, tw + 6, 14);
+        ctx.fillStyle = u.team === 'player' ? '#fbbf24' : '#f87171';
+        ctx.fillText(u.intent, p.x, p.y - 11);
+      }
+    }
+
+    // Leader's current play, shown at the top of the room.
+    if (sim.play) {
+      const target = sim.units.find(x => x.id === sim.play.targetId);
+      const label = sim.play.type === 'focus' ? 'Focus fire'
+        : sim.play.type === 'backline' ? 'Focus backline'
+        : sim.play.type === 'retreat' ? 'Retreat'
+        : sim.play.type === 'hold' ? 'Hold the line'
+        : sim.play.type === 'scatter' ? 'Scatter'
+        : sim.play.type;
+      const full = target
+        ? `Play: ${label} → ${target.def.name || 'target'}`
+        : `Play: ${label}`;
+      ctx.font = 'bold 13px monospace';
+      ctx.textAlign = 'left';
+      ctx.fillStyle = 'rgba(0,0,0,0.6)';
+      const tw = ctx.measureText(full).width;
+      const tl = this._toScreen({ x: 0, y: 0 });
+      ctx.fillRect(tl.x + 8, tl.y + 8, tw + 10, 18);
+      ctx.fillStyle = '#4ade80';
+      ctx.fillText(full, tl.x + 13, tl.y + 21);
     }
   }
 
@@ -195,6 +228,56 @@ export class Renderer {
       const frac = u.hp / u.maxHp;
       ctx.fillStyle = frac > 0.5 ? '#4ade80' : frac > 0.25 ? '#facc15' : '#f87171';
       ctx.fillRect(p.x - bw / 2, by, bw * frac, bh);
+
+      // Mana bar (only for units that use mana, e.g. the healer).
+      if (u.maxMana > 0) {
+        const mby = by + bh + 1;
+        ctx.fillStyle = '#000';
+        ctx.fillRect(p.x - bw / 2, mby, bw, bh);
+        ctx.fillStyle = '#22d3ee';
+        ctx.fillRect(p.x - bw / 2, mby, bw * (u.mana / u.maxMana), bh);
+      }
+
+      // Debug hover highlight: ring around the unit whose card is hovered.
+      if (this.highlightId === u.id) {
+        ctx.strokeStyle = '#fbbf24';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, s / 2 + 6, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+  }
+
+  // Speech bubbles: draw each active line above its speaker, fading out as it
+  // expires. Reads sim state only; never mutates it.
+  _drawBubbles(sim) {
+    const ctx = this.ctx;
+    for (const b of sim.bubbles) {
+      const u = sim.units.find(x => x.id === b.unitId);
+      if (!u || !u.alive) continue;
+      const p = this._toScreen(u.pos);
+      const alpha = Math.max(0, Math.min(1, b.life / 0.5));
+      ctx.globalAlpha = alpha;
+      ctx.font = '12px monospace';
+      ctx.textAlign = 'center';
+      const tw = ctx.measureText(b.text).width;
+      const bx = p.x;
+      const by = p.y - u.size * this.scale / 2 - 26;
+      // Bubble background with a small tail.
+      ctx.fillStyle = 'rgba(0,0,0,0.75)';
+      ctx.beginPath();
+      ctx.roundRect(bx - tw / 2 - 6, by - 14, tw + 12, 20, 4);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(bx - 4, by + 6);
+      ctx.lineTo(bx + 4, by + 6);
+      ctx.lineTo(bx, by + 12);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = '#fff';
+      ctx.fillText(b.text, bx, by);
+      ctx.globalAlpha = 1;
     }
   }
 

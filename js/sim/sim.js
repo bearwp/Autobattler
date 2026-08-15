@@ -15,6 +15,7 @@ export class Sim {
     this.time = 0;
     this.started = false;
     this.over = null;         // 'win' | 'lose' | null
+    this.paused = false;      // debug: freeze the sim so the player can inspect
     this.level = 1;
     this.effects = [];        // transient visual effects (read by renderer)
     this._spawnQueue = [];    // team members waiting to enter the room
@@ -27,6 +28,13 @@ export class Sim {
     this.restCandidates = []; // members offered at a rest point
     this._recruitSeq = 0;     // unique id counter for recruited members
     this.bonds = new Map();   // "idA|idB" (sorted) -> bond value, persists across rooms
+    this.play = null;         // current leader-called play: { type, targetId, until }
+    this.playsEnabled = false; // leader-called plays toggle (off by default)
+    this.bubbles = [];        // active speech bubbles: { unitId, text, life }
+    this._nextBubbleAt = 0;   // sim time when the next line may be spoken
+    this._saidFirstBlood = false;
+    this._saidOutnumbered = false;
+    this._saidWinning = false;
     this._reset();
   }
 
@@ -40,8 +48,11 @@ export class Sim {
   // --- Synergy (pair bonds) ---
 
   // Canonical key for a pair of members, sorted so order doesn't matter.
+  // Keyed by the stable member id (def.id), not the per-room unit instance id,
+  // so bonds persist across rooms as intended.
   _bondKey(a, b) {
-    return a.id < b.id ? `${a.id}|${b.id}` : `${b.id}|${a.id}`;
+    const ai = a.def.id, bi = b.def.id;
+    return ai < bi ? `${ai}|${bi}` : `${bi}|${ai}`;
   }
 
   _getBond(a, b) {
@@ -160,14 +171,24 @@ export class Sim {
       this.restCandidates = this._rollRecruits();
       this.started = false;
       this.over = null;
+      // Resting refills mana for units that use it (e.g. the healer).
+      this._refillMana();
       return;
     }
     this._startLevel(node);
   }
 
+  // Refill mana for all living members that use it. Mana only regenerates at
+  // rest points, so a healer must rest to keep healing.
+  _refillMana() {
+    for (const m of this.members) {
+      if (this.deadIds.has(m.id)) continue;
+      if (m.stats.mana) m.stats.mana.current = m.stats.mana.max;
+    }
+  }
+
   // Generate a small pool of random members to offer at a rest point.
-  _rollRecruits() {
-    const pool = [];
+  _rollRecruits() {    const pool = [];
     for (let i = 0; i < 3; i++) {
       pool.push(this._randomMember());
     }
@@ -177,12 +198,17 @@ export class Sim {
   // A random member drawn from the attribute vocabulary.
   _randomMember() {
     const id = 'r' + (++this._recruitSeq);
-    const names = ['Rogue', 'Knight', 'Mage', 'Ranger', 'Cleric', 'Berserker', 'Scout', 'Warden'];
+    const names = ['Rogue', 'Knight', 'Mage', 'Ranger', 'Cleric', 'Berserker', 'Scout', 'Warden',
+      'Aria', 'Bram', 'Cora', 'Dax', 'Elara', 'Finn', 'Gwen', 'Hugo', 'Iris', 'Jax',
+      'Kira', 'Liam', 'Mara', 'Niko', 'Owen', 'Pia', 'Quinn', 'Rhea', 'Soren', 'Tessa',
+      'Ulf', 'Vera', 'Wren', 'Xander', 'Yara', 'Zane', 'Bryn', 'Cade', 'Della', 'Emmett',
+      'Freya', 'Galen', 'Hazel', 'Ivo', 'Juno', 'Kade', 'Liora', 'Milo', 'Nadia', 'Orin',
+      'Petra', 'Ronan', 'Sable', 'Talon', 'Una', 'Vance', 'Willa', 'Yuri', 'Zelda'];
     const colors = ['#f87171', '#fb923c', '#fbbf24', '#4ade80', '#22d3ee', '#a78bfa', '#f472b6', '#94a3b8'];
     const shapes = ['square', 'triangle', 'circle'];
     const atkTypes = ['damage', 'damage', 'damage', 'heal', 'taunt'];
     const atkShapes = ['rangeOneShot', 'rangeAoe', 'meleeOneShot', 'meleeCone', 'meleeAoe'];
-    const moves = ['hold', 'keepDistance', 'kite', 'evade', 'follow', 'advance'];
+    const moves = ['keepDistance', 'kite', 'evade', 'follow', 'advance'];
     const rules = ['lowestHp', 'highestHp', 'closest', 'strongest', 'weakest', 'mostAtOnce', 'threatened'];
     const modPool = ['taunt', 'lifesteal', 'pierce', 'slow', 'peel', 'evasive'];
 
@@ -247,6 +273,15 @@ export class Sim {
     this.over = null;
     this.effects = [];
     this._spawnQueue = [];
+    // Reset dialogue state so a fresh room starts talking cleanly. The global
+    // bubble cooldown is sim-time based, so it must reset with the clock.
+    this.bubbles = [];
+    this._nextBubbleAt = 0;
+    this._saidFirstBlood = false;
+    this._saidOutnumbered = false;
+    this._saidWinning = false;
+    this._saidBossFight = false;
+    this._saidEliteFight = false;
     this._queueTeam();
     this._spawnBats(node);
   }
@@ -257,11 +292,22 @@ export class Sim {
     const gap = 0.8; // seconds between each member entering
     // Skip members that died in a previous level (perma-death).
     const alive = this.members.filter(m => !this.deadIds.has(m.id));
-    this._spawnQueue = alive.map((m, i) => ({
-      member: m,
-      pos: { x: entrance.x + 0.5, y: entrance.y },
-      at: i * gap,
-    }));
+    // Stagger spawn positions vertically across the door gap so members enter
+    // side by side instead of all piling onto the same point and jamming the
+    // narrow doorway.
+    const doorHalf = entrance.width / 2;
+    const spread = Math.max(0.4, doorHalf - 0.4); // keep clear of the door edges
+    this._spawnQueue = alive.map((m, i) => {
+      // Evenly distribute across the door gap; alternate sides for odd counts.
+      const t = alive.length > 1 ? i / (alive.length - 1) : 0.5;
+      const y = entrance.y - spread + 2 * spread * t;
+      return {
+        member: m,
+        pos: { x: entrance.x + 0.5, y },
+        at: i * gap,
+        slot: i,
+      };
+    });
   }
 
   _spawnBats(node) {
@@ -278,31 +324,78 @@ export class Sim {
     // Boss room: a single large bat.
     if (type === 'boss') {
       const pos = { x: width * 0.7, y: height / 2 };
-      const bossDef = {
-        ...CONFIG.bat,
-        hp: m.bossHp, atk: m.bossAtk, size: 1.2, color: '#f43f5e',
+      const lvlMult = Math.pow(1 + m.levelHpMult, this.level - 1);
+      const lvlAtk = Math.pow(1 + m.levelAtkMult, this.level - 1);
+      const bossDef = {        ...CONFIG.enemies.bat,
+        hp: m.bossHp * lvlMult, atk: m.bossAtk * lvlAtk, size: 1.2, color: '#f43f5e',
       };
       const u = new Unit(bossDef, { team: 'enemy', pos });
       this.units.push(u);
       this.enemyUnits.push(u);
+
+      // Boss adds: a small escort of mixed enemy types around the boss.
+      const escortCount = m.bossEscortCount;
+      for (let i = 0; i < escortCount; i++) {
+        const escortDef = { ...this._pickEnemyType() };
+        escortDef.hp = escortDef.hp * lvlMult;
+        escortDef.atk = escortDef.atk * lvlAtk;
+        const angle = (i / escortCount) * Math.PI * 2;
+        const epos = {
+          x: pos.x + Math.cos(angle) * 3,
+          y: pos.y + Math.sin(angle) * 3,
+        };
+        const e = new Unit(escortDef, { team: 'enemy', pos: epos });
+        this.units.push(e);
+        this.enemyUnits.push(e);
+      }
+      // The team reacts to facing the boss.
+      if (!this._saidBossFight) {
+        this._saidBossFight = true;
+        const speaker = this.playerUnits.find(a => a.alive);
+        if (speaker) this._say(speaker, 'bossFight');
+      }
       return;
     }
 
-    // Combat / elite: a swarm of bats (elite bats are tougher).
-    const n = CONFIG.bat.count + (this.level - 1) * CONFIG.bat.countPerLevel;
+    // Combat / elite: a swarm of a randomly-chosen enemy type (elite is tougher).
+    const enemyDef = this._pickEnemyType();
+    const n = enemyDef.count + (this.level - 1) * enemyDef.countPerLevel;
     const elite = type === 'elite';
+    // Enemies scale up each level so the run keeps getting harder even though
+    // the swarm size grows slowly. Applied after the elite multiplier.
+    const lvlMult = Math.pow(1 + m.levelHpMult, this.level - 1);
+    const lvlAtk = Math.pow(1 + m.levelAtkMult, this.level - 1);
     for (let i = 0; i < n; i++) {
       const pos = {
         x: 3 + Math.random() * (width - 6),
         y: 2 + Math.random() * (height - 4),
       };
-      const def = elite
-        ? { ...CONFIG.bat, hp: CONFIG.bat.hp * m.eliteHpMult, atk: CONFIG.bat.atk * m.eliteAtkMult, color: '#fb923c' }
-        : CONFIG.bat;
+      const base = elite
+        ? { ...enemyDef, hp: enemyDef.hp * m.eliteHpMult, atk: enemyDef.atk * m.eliteAtkMult, color: '#fb923c' }
+        : enemyDef;
+      const def = { ...base, hp: base.hp * lvlMult, atk: base.atk * lvlAtk };
       const u = new Unit(def, { team: 'enemy', pos });
       this.units.push(u);
       this.enemyUnits.push(u);
     }
+    // The team reacts to an elite room.
+    if (elite && !this._saidEliteFight) {
+      this._saidEliteFight = true;
+      const speaker = this.playerUnits.find(a => a.alive);
+      if (speaker) this._say(speaker, 'eliteFight');
+    }
+  }
+
+  // Pick an enemy type for a combat room, weighted by CONFIG.enemyWeights.
+  _pickEnemyType() {
+    const weights = CONFIG.enemyWeights;
+    const total = Object.values(weights).reduce((a, b) => a + b, 0);
+    let r = Math.random() * total;
+    for (const [id, w] of Object.entries(weights)) {
+      r -= w;
+      if (r <= 0) return CONFIG.enemies[id];
+    }
+    return CONFIG.enemies.bat;
   }
 
   // Treasure room: grant a permanent max-HP bonus to all living members.
@@ -325,13 +418,14 @@ export class Sim {
 
   // Advance the sim by one fixed timestep (dt in seconds).
   step(dt) {
-    if (!this.started || this.over) return;
+    if (!this.started || this.over || this.paused) return;
     this.time += dt;
 
     // Release queued team members as their entry time arrives.
     while (this._spawnQueue.length > 0 && this._spawnQueue[0].at <= this.time) {
       const s = this._spawnQueue.shift();
       const u = new Unit(s.member, { team: 'player', pos: s.pos });
+      u.slot = s.slot;
       this.units.push(u);
       this.playerUnits.push(u);
     }
@@ -359,10 +453,16 @@ export class Sim {
     }
 
     // Update each unit's AI.
+    if (this.playsEnabled) this._callPlays(dt);
     for (const u of this.units) {
       if (!u.alive) continue;
-      if (u.isBat) this._updateBat(u, dt);
+      if (u.isBat) this._updateEnemy(u, dt);
       else this._updateMember(u, dt);
+    }
+
+    // Persist mana back to the member def so it carries across rooms.
+    for (const u of this.playerUnits) {
+      if (u.def.stats && u.def.stats.mana) u.def.stats.mana.current = u.mana;
     }
 
     // Integrate positions.
@@ -391,6 +491,70 @@ export class Sim {
         }
       }
     }
+
+    // Banter reactions to deaths that happened this step.
+    for (const u of this.units) {
+      if (!u.alive || !u._deathFx) continue;
+      if (u.team === 'enemy') {
+        // A member whose target just died celebrates the kill.
+        const killer = this.playerUnits.find(a => a.alive && a.target === u);
+        if (killer) this._say(killer, 'killing', u);
+      } else {
+        // A member just fell: surviving allies react.
+        for (const a of this.playerUnits) {
+          if (a.alive && a !== u) this._say(a, 'allyDown', u);
+        }
+      }
+    }
+
+    // A member that just dropped to low HP speaks up (once per drop).
+    for (const u of this.playerUnits) {
+      if (!u.alive) continue;
+      if (u.hp / u.maxHp < 0.35 && !u._saidLowHp) {
+        u._saidLowHp = true;
+        this._say(u, 'lowHp');
+      } else if (u.hp / u.maxHp >= 0.5) {
+        u._saidLowHp = false;
+      }
+    }
+
+    // A member that just took a hit reacts (occasionally, not every hit).
+    for (const u of this.playerUnits) {
+      if (!u.alive || !u._tookDamage) continue;
+      u._tookDamage = false;
+      if (Math.random() < 0.25) this._say(u, 'takingDamage');
+    }
+
+    // First kill of the room: the team celebrates.
+    if (!this._saidFirstBlood && this.enemyUnits.some(e => !e.alive)) {
+      this._saidFirstBlood = true;
+      const speaker = this.playerUnits.find(a => a.alive);
+      if (speaker) this._say(speaker, 'firstBlood');
+    }
+
+    // Outnumbered: the team reacts when heavily outnumbered.
+    const aliveEnemies = this.enemyUnits.filter(e => e.alive).length;
+    const aliveAllies = this.playerUnits.filter(a => a.alive).length;
+    if (aliveEnemies > aliveAllies * CONFIG.team.holdOutnumberMult && !this._saidOutnumbered) {
+      this._saidOutnumbered = true;
+      const speaker = this.playerUnits.find(a => a.alive);
+      if (speaker) this._say(speaker, 'outnumbered');
+    } else if (aliveEnemies <= aliveAllies) {
+      this._saidOutnumbered = false;
+    }
+
+    // Winning: the team cheers when the last enemies are nearly gone.
+    if (aliveEnemies > 0 && aliveEnemies <= 2 && !this._saidWinning) {
+      this._saidWinning = true;
+      const speaker = this.playerUnits.find(a => a.alive);
+      if (speaker) this._say(speaker, 'winning');
+    } else if (aliveEnemies > 2) {
+      this._saidWinning = false;
+    }
+
+    // Team banter: age out bubbles and tick per-unit speak cooldowns. Lines
+    // themselves are emitted at the moment their situation happens (see _say).
+    this._updateBubbles(dt);
 
     this._checkEnd();
   }
@@ -454,7 +618,7 @@ export class Sim {
     const { exit } = CONFIG.doors;
     for (const u of this.playerUnits) {
       if (!u.alive) continue;
-      if (Math.abs(u.pos.y - exit.y) <= exit.width / 2 && u.pos.x >= exit.x - 0.5) {
+      if (Math.abs(u.pos.y - exit.y) <= exit.width / 2 && u.pos.x >= exit.x - 1.0) {
         this._roomCleared();
         return;
       }
@@ -493,10 +657,113 @@ export class Sim {
     if (!choices.some(c => c.id === nodeId)) return;
     this.level += 1;
     this._enterNode(nodeId);
-    this.started = true;
+    // Rest nodes pause the sim (their screen is shown instead); only combat
+    // rooms start running. Setting started=true here would let _checkEnd run
+    // during rest and re-trigger the room-clear with the stale empty enemy
+    // list, opening the map behind the rest overlay.
+    const node = this.map.nodes.find(n => n.id === nodeId);
+    if (!node || node.type !== 'rest') this.started = true;
   }
 
   // --- Member AI (generic, driven by the member's attribute bundle) ---
+
+  // The leader calls plays: a lightweight coordination layer that nudges the
+  // whole team toward a shared goal. It only runs while a leader is alive and
+  // there are enemies. Each play is a short-lived directive (a few seconds)
+  // that biases every member's behavior, so the team acts as one unit instead
+  // of each member doing its own thing. The leader picks a play based on the
+  // situation: retreat when hurt, hold when outnumbered, focus the backline
+  // when a squishy is exposed, otherwise focus fire.
+  _callPlays(dt) {
+    const leader = this.playerUnits.find(a => a.alive && a.isLeader);
+    const enemies = this.enemyUnits.filter(e => e.alive);
+    if (!leader || enemies.length === 0) { this.play = null; return; }
+
+    // Expire the current play once its duration elapses.
+    if (this.play && this.time >= this.play.until) {
+      this.play = null;
+      for (const a of this.playerUnits) a._saidRetreat = false;
+    }
+
+    // Only call a new play when there isn't one active.
+    if (this.play) return;
+
+    const t = CONFIG.team;
+    const allies = this.playerUnits.filter(a => a.alive);
+    const avgHp = allies.reduce((s, a) => s + a.hp / a.maxHp, 0) / allies.length;
+    const play = { type: 'focus', targetId: null, until: this.time + t.playDuration };
+
+    // Retreat: the team is badly hurt, fall back toward the exit to regroup.
+    if (avgHp < t.retreatHpThreshold) {
+      play.type = 'retreat';
+      this.play = play;
+      return;
+    }
+
+    // Hold the line: heavily outnumbered, dig in and defend instead of pushing.
+    if (enemies.length > allies.length * t.holdOutnumberMult) {
+      play.type = 'hold';
+      this.play = play;
+      return;
+    }
+
+    // Scatter: enemies are clustered together (AOE threat), so spread out to
+    // avoid taking splash damage as a group.
+    if (this._enemiesClustered(enemies)) {
+      play.type = 'scatter';
+      this.play = play;
+      return;
+    }
+
+    // Backline: a squishy enemy is exposed, focus it down.
+    const squishy = enemies.find(e => e.armor <= 0 && e.hp < e.maxHp * 0.8);
+    if (squishy) {
+      play.type = 'backline';
+      play.targetId = squishy.id;
+      this.play = play;
+      return;
+    }
+
+    // Focus fire: pick the enemy most of the team is already attacking, or
+    // the lowest-HP one, so the team concentrates damage and kills fast.
+    const counts = new Map();
+    for (const u of this.playerUnits) {
+      if (!u.alive || !u.target || !u.target.alive) continue;
+      counts.set(u.target.id, (counts.get(u.target.id) ?? 0) + 1);
+    }
+    let best = null, bestCount = 0;
+    for (const [id, c] of counts) {
+      if (c > bestCount) { bestCount = c; best = id; }
+    }
+    if (best) {
+      play.type = 'focus';
+      play.targetId = best;
+    } else {
+      // No one is attacking yet: focus the lowest-HP enemy.
+      let low = null, lowHp = Infinity;
+      for (const e of enemies) {
+        if (e.hp < lowHp) { lowHp = e.hp; low = e; }
+      }
+      if (low) { play.type = 'focus'; play.targetId = low.id; }
+    }
+
+    this.play = play;
+  }
+
+  // True when a group of enemies is bunched together tightly enough that an
+  // AOE would hit several of them at once. Used to call a scatter play.
+  _enemiesClustered(enemies) {
+    const t = CONFIG.team;
+    for (let i = 0; i < enemies.length; i++) {
+      let count = 0;
+      for (let j = 0; j < enemies.length; j++) {
+        if (i === j) continue;
+        if (dist(enemies[i].pos, enemies[j].pos) <= t.scatterClusterRadius) count++;
+      }
+      if (count >= t.scatterClusterCount) return true;
+    }
+    return false;
+  }
 
   _updateMember(u, dt) {
     const enemies = this.enemyUnits.filter(e => e.alive);
@@ -512,6 +779,37 @@ export class Sim {
       target = this._healTarget(u, allies);
     } else if (side === 'enemy') {
       target = this._focusFireTarget(u, target, enemies, allies);
+      // Leader's play: if the leader called a focus/backline target, prefer it
+      // so the team concentrates fire instead of scattering.
+      if (this.play && (this.play.type === 'focus' || this.play.type === 'backline') && this.play.targetId) {
+        const called = enemies.find(e => e.id === this.play.targetId);
+        if (called && dist(u.pos, called.pos) <= u.attack.range) target = called;
+      }
+    }
+
+    // Leader's play overrides movement for the whole team.
+    if (this.play && this.play.type === 'retreat') {
+      if (!u._saidRetreat) {
+        u._saidRetreat = true;
+        this._say(u, 'retreating');
+      }
+      this._intent(u, 'retreating (leader call)');
+      this._moveAlongPath(u, this._exitGoal(), dt);
+      this._separate(u, allies, dt);
+      this._resolveAttacks(u, target, enemies, allies);
+      return;
+    }
+    if (this.play && this.play.type === 'hold') {
+      this._intent(u, 'holding the line (leader call)');
+      this._idleWander(u, dt);
+      this._resolveAttacks(u, target, enemies, allies);
+      return;
+    }
+    if (this.play && this.play.type === 'scatter') {
+      this._intent(u, 'scattering (leader call)');
+      this._scatter(u, allies, enemies, dt);
+      this._resolveAttacks(u, target, enemies, allies);
+      return;
     }
 
     // Movement decision.
@@ -529,6 +827,9 @@ export class Sim {
 
     // Resolve attacks (primary + universal secondary).
     this._resolveAttacks(u, target, enemies, allies);
+
+    // Occasional "thinking" line reflecting what the unit is currently doing.
+    this._think(u);
   }
 
   // Healers prefer the ally with the strongest bond, weighted against how
@@ -586,6 +887,7 @@ export class Sim {
 
     const threat = nearestEnemy(best, enemies);
     // Peel: move toward the enemy menacing the ally.
+    this._intent(u, 'peeling for ally');
     this._moveAlongPath(u, threat.pos, dt);
     this._separate(u, allies, dt);
     // Defending an ally strengthens the bond with them.
@@ -602,6 +904,7 @@ export class Sim {
     const away = norm(sub(u.pos, hunter.pos));
     const toExit = norm(sub(this._exitGoal(), u.pos));
     const dir = norm(add(away, scale(toExit, 0.8)));
+    this._intent(u, 'evading hunter');
     this._setVel(u, scale(dir, u.effSpeed), dt);
   }
 
@@ -620,9 +923,14 @@ export class Sim {
       const threshold = t.healSeekThreshold;
       const active = u.seekingHeal || hpFrac < threshold;
       if (active && hpFrac < threshold + t.healSeekHysteresis) {
+        if (!u.seekingHeal) {
+          // Just started seeking healing: speak up.
+          this._say(u, 'seekingHeal');
+        }
         u.seekingHeal = true;
         const healer = allies.find(a => a.alive && a !== u && a.attack && a.attack.type === 'heal');
         if (healer) {
+          this._intent(u, 'seeking healer');
           this._moveAlongPath(u, healer.pos, dt);
           this._separate(u, allies, dt);
           return;
@@ -640,6 +948,7 @@ export class Sim {
         if (protector) {
           const away = norm(sub(protector.pos, threat.pos));
           const spot = add(protector.pos, scale(away, t.hideOffset));
+          this._intent(u, 'hiding behind ally');
           this._moveAlongPath(u, spot, dt);
           this._separate(u, allies, dt);
           return;
@@ -664,19 +973,12 @@ export class Sim {
   _applyMovement(u, target, enemies, allies, dt) {
     const mv = u.movement;
 
-    // Hold: stay put (still attack in range), with a subtle idle drift so the
-    // unit doesn't look frozen.
-    if (mv === 'hold') {
-      this._idleWander(u, dt);
-      return;
-    }
-
     // Follow: follow the leader (or advance if no leader alive).
     if (mv === 'follow') {
       const leader = this.playerUnits.find(a => a.alive && a.isLeader);
-      const goal = leader ? leader.pos : this._exitGoal();
+      const goal = leader ? this._advanceGoal(u) : this._exitGoal();
       if (leader) {
-        const d = dist(u.pos, leader.pos);
+        const d = dist(u.pos, goal);
         const t = CONFIG.team;
         // Hysteresis: stop once inside the follow distance, resume only after
         // drifting past it by the dead-zone, so the follower doesn't jitter at
@@ -684,16 +986,19 @@ export class Sim {
         if (d <= t.followDistance) {
           if (!u.following) u.following = true;
           if (u.following && d >= t.followDistance - t.followHysteresis) {
+            this._intent(u, 'following leader');
             this._idleWander(u, dt);
             return;
           }
         } else {
           u.following = false;
         }
+        this._intent(u, 'following leader');
         this._moveAlongPath(u, goal, dt);
         this._separate(u, allies, dt);
         return;
       }
+      this._intent(u, 'advancing to exit');
       this._moveAlongPath(u, goal, dt);
       this._separate(u, allies, dt);
       return;
@@ -705,6 +1010,7 @@ export class Sim {
       const near = nearestEnemy(u, enemies);
       if (!near) {
         // No enemies: trail the leader instead of racing to the exit.
+        this._intent(u, 'advancing (no enemies)');
         this._moveAlongPath(u, this._advanceGoal(u), dt);
         this._separate(u, allies, dt);
         return;
@@ -713,6 +1019,7 @@ export class Sim {
       if (dNear < CONFIG.team.kiteDistance - CONFIG.team.kiteHysteresis) {
         // Back away from the enemy, but bias the retreat toward the exit so
         // the unit doesn't get pinned against the entrance wall.
+        this._intent(u, 'kiting away');
         const away = norm(sub(u.pos, near.pos));
         const toExit = norm(sub(this._exitGoal(), u.pos));
         const dir = norm(add(away, scale(toExit, 0.8)));
@@ -722,11 +1029,13 @@ export class Sim {
       }
       if (dNear > u.attack.range) {
         // Too far to shoot: close in on the nearest enemy.
+        this._intent(u, 'closing to range');
         this._moveAlongPath(u, near.pos, dt);
         this._separate(u, allies, dt);
         return;
       }
       // In range: hold and shoot.
+      this._intent(u, 'shooting');
       u.vel = { x: 0, y: 0 };
       return;
     }
@@ -735,10 +1044,12 @@ export class Sim {
     if (mv === 'keepDistance') {
       const near = nearestEnemy(u, enemies);
       if (near && dist(u.pos, near.pos) < CONFIG.team.keepDistance - CONFIG.team.keepHysteresis) {
+        this._intent(u, 'backing off');
         const away = norm(sub(u.pos, near.pos));
         this._setVel(u, scale(away, u.effSpeed), dt);
         return;
       }
+      this._intent(u, 'holding distance');
       const goal = enemies.length === 0 ? this._advanceGoal(u) : { x: CONFIG.doors.entrance.x + 2, y: CONFIG.doors.entrance.y };
       this._moveAlongPath(u, goal, dt);
       this._separate(u, allies, dt);
@@ -751,12 +1062,14 @@ export class Sim {
     if (mv === 'evade') {
       const hunter = threatenedEnemy(u, enemies);
       if (!hunter) {
+        this._intent(u, 'advancing (no hunter)');
         this._moveAlongPath(u, this._advanceGoal(u), dt);
         this._separate(u, allies, dt);
         return;
       }
       const dH = dist(u.pos, hunter.pos);
       if (dH < CONFIG.team.evadeDistance - CONFIG.team.evadeHysteresis) {
+        this._intent(u, 'evading hunter');
         const away = norm(sub(u.pos, hunter.pos));
         const toExit = norm(sub(this._exitGoal(), u.pos));
         const dir = norm(add(away, scale(toExit, 0.8)));
@@ -764,10 +1077,12 @@ export class Sim {
         return;
       }
       if (dH > u.attack.range) {
+        this._intent(u, 'closing on hunter');
         this._moveAlongPath(u, hunter.pos, dt);
         this._separate(u, allies, dt);
         return;
       }
+      this._intent(u, 'shooting hunter');
       u.vel = { x: 0, y: 0 };
       return;
     }
@@ -777,6 +1092,7 @@ export class Sim {
     // target, then closes in once positioned.
     if (mv === 'flank') {
       if (!target) {
+        this._intent(u, 'advancing (no target)');
         this._moveAlongPath(u, this._advanceGoal(u), dt);
         this._separate(u, allies, dt);
         return;
@@ -789,11 +1105,13 @@ export class Sim {
       const side = add(target.pos, scale(perpN, CONFIG.team.flankDistance));
       if (dT > u.attack.range + 0.5) {
         // Still far: head for the flanking point.
+        this._intent(u, 'flanking target');
         this._moveAlongPath(u, side, dt);
         this._separate(u, allies, dt);
         return;
       }
       // In range: hold and attack.
+      this._intent(u, 'attacking from flank');
       u.vel = { x: 0, y: 0 };
       return;
     }
@@ -801,7 +1119,9 @@ export class Sim {
     // Charge: build up speed toward the target and ram it for bonus damage.
     if (mv === 'charge') {
       if (target && dist(u.pos, target.pos) > u.attack.range) {
+        if (!u.chargeReady) this._say(u, 'charging', target);
         u.chargeReady = true;
+        this._intent(u, 'charging target');
         this._moveAlongPath(u, target.pos, dt);
         this._separate(u, allies, dt);
         // Override the path speed with a charge burst.
@@ -811,10 +1131,12 @@ export class Sim {
       }
       if (!target) {
         u.chargeReady = false;
+        this._intent(u, 'advancing (no target)');
         this._moveAlongPath(u, this._advanceGoal(u), dt);
         this._separate(u, allies, dt);
         return;
       }
+      this._intent(u, 'attacking');
       u.vel = { x: 0, y: 0 };
       return;
     }
@@ -827,16 +1149,19 @@ export class Sim {
       const threat = nearestEnemy(guarded, enemies);
       if (threat && dist(guarded.pos, threat.pos) <= CONFIG.team.guardEngageRange) {
         // An enemy is menacing the guarded ally: intercept it.
+        this._intent(u, 'intercepting threat to ally');
         this._moveAlongPath(u, threat.pos, dt);
         this._separate(u, allies, dt);
         return;
       }
       // No immediate threat: hold position near the guarded ally.
       if (guarded !== u && dist(u.pos, guarded.pos) > CONFIG.team.guardDistance) {
+        this._intent(u, 'guarding ally');
         this._moveAlongPath(u, guarded.pos, dt);
         this._separate(u, allies, dt);
         return;
       }
+      this._intent(u, 'guarding');
       u.vel = { x: 0, y: 0 };
       return;
     }
@@ -846,10 +1171,12 @@ export class Sim {
     if (mv === 'hunt') {
       const prey = nearestEnemy(u, enemies);
       if (prey) {
+        this._intent(u, 'hunting prey');
         this._moveAlongPath(u, prey.pos, dt);
         this._separate(u, allies, dt);
         return;
       }
+      this._intent(u, 'advancing (no prey)');
       this._moveAlongPath(u, this._advanceGoal(u), dt);
       this._separate(u, allies, dt);
       return;
@@ -857,26 +1184,35 @@ export class Sim {
 
     // Advance (default): move toward target, else toward exit.
     if (target && dist(u.pos, target.pos) > u.attack.range) {
+      this._intent(u, 'advancing on target');
       this._moveAlongPath(u, target.pos, dt);
       this._separate(u, allies, dt);
       return;
     }
     if (!target) {
+      this._intent(u, 'advancing to exit');
       this._moveAlongPath(u, this._advanceGoal(u), dt);
       this._separate(u, allies, dt);
       return;
     }
+    this._intent(u, 'attacking');
     u.vel = { x: 0, y: 0 };
   }
 
   // Where a member heads when there's nothing to fight. The leader leads
   // toward the exit; everyone else trails behind the leader so the leader
-  // stays in front instead of being overtaken by the back line.
+  // stays in front instead of being overtaken by the back line. Followers
+  // spread into a line (by formation slot) so they don't all stack on the
+  // same point and clump together.
   _advanceGoal(u) {
     const leader = this.playerUnits.find(a => a.alive && a.isLeader);
     if (!leader || u.isLeader) return this._exitGoal();
     const back = norm(sub(leader.pos, this._exitGoal()));
-    return add(leader.pos, scale(back, CONFIG.team.followDistance));
+    const t = CONFIG.team;
+    // Offset each follower sideways by its slot so the line fans out.
+    const side = { x: -back.y, y: back.x };
+    const spread = (u.slot - 1) * t.formationSpread;
+    return add(add(leader.pos, scale(back, t.followDistance)), scale(side, spread));
   }
 
   _resolveAttacks(u, target, enemies, allies) {
@@ -902,8 +1238,15 @@ export class Sim {
 
     switch (atk.type) {
       case 'heal': {
-        // Heal the target (an ally).
+        // Heal the target (an ally). Costs mana if the healer uses it; a
+        // healer with no mana left can't heal until the team rests.
+        if (u.maxMana > 0 && u.mana < u.manaCost) {
+          this._intent(u, 'out of mana');
+          break;
+        }
+        if (u.maxMana > 0) u.mana -= u.manaCost;
         target.heal(atk.atk);
+        this._say(u, 'healing', target);
         this.effects.push({
           type: 'heal', from: { ...u.pos }, to: { ...target.pos }, life: 0.4,
         });
@@ -929,6 +1272,7 @@ export class Sim {
           this.effects.push({
             type: 'taunt', pos: { ...u.pos }, radius, life: 0.5,
           });
+          this._say(u, 'taunting');
         }
         break;
       }
@@ -1077,7 +1421,18 @@ export class Sim {
     });
   }
 
-  // --- Bat AI (boids) ---
+  // --- Enemy AI ---
+  // Dispatches to a per-kind behavior. All kinds share the same target
+  // picker (_pickBatTarget) but move and attack differently.
+
+  _updateEnemy(u, dt) {
+    switch (u.def.kind) {
+      case 'brute': return this._updateBrute(u, dt);
+      case 'spitter': return this._updateSpitter(u, dt);
+      case 'wisp': return this._updateWisp(u, dt);
+      default: return this._updateBat(u, dt);
+    }
+  }
 
   _updateBat(u, dt) {
     const enemies = this.playerUnits.filter(e => e.alive);
@@ -1116,6 +1471,73 @@ export class Sim {
     }
   }
 
+  // Brute: slow, tanky melee. Ignores boids cohesion, charges straight at the
+  // target and hits hard up close.
+  _updateBrute(u, dt) {
+    const enemies = this.playerUnits.filter(e => e.alive);
+    if (enemies.length === 0) { u.vel = { x: 0, y: 0 }; return; }
+    const target = this._pickBatTarget(u, enemies);
+
+    const toTarget = norm(sub(target.pos, u.pos));
+    const wall = this._boidWallAvoidance(u);
+    const steer = add(scale(toTarget, 1.0), scale(wall, 2.0));
+    const force = clampLen(steer, CONFIG.boids.maxForce);
+    u.vel = clampLen(add(u.vel, scale(force, dt)), u.effSpeed);
+
+    if (target && dist(u.pos, target.pos) <= u.def.range) {
+      if (u.attackTimer <= 0) {
+        u.attackTimer = CONFIG.combat.attackCooldown;
+        u.target = target;
+        target.takeDamage(u.def.atk);
+        target.addThreat(u, u.def.atk);
+        this.effects.push({
+          type: 'attack', from: { ...u.pos }, to: { ...target.pos },
+          color: '#f87171', life: 0.15,
+        });
+      }
+    }
+  }
+
+  // Spitter: ranged. Keeps distance from its target and fires from afar.
+  _updateSpitter(u, dt) {
+    const enemies = this.playerUnits.filter(e => e.alive);
+    if (enemies.length === 0) { u.vel = { x: 0, y: 0 }; return; }
+    const target = this._pickBatTarget(u, enemies);
+
+    const d = dist(u.pos, target.pos);
+    const desired = u.def.range * 0.7; // preferred standoff distance
+    let steer;
+    if (d > desired + 0.5) {
+      steer = norm(sub(target.pos, u.pos));          // close in
+    } else if (d < desired - 0.5) {
+      steer = norm(sub(u.pos, target.pos));          // back off
+    } else {
+      steer = { x: 0, y: 0 };
+    }
+    const wall = this._boidWallAvoidance(u);
+    const force = clampLen(add(scale(steer, 1.0), scale(wall, 2.0)), CONFIG.boids.maxForce);
+    u.vel = clampLen(add(u.vel, scale(force, dt)), u.effSpeed);
+
+    if (target && d <= u.def.range) {
+      if (u.attackTimer <= 0) {
+        u.attackTimer = CONFIG.combat.attackCooldown;
+        u.target = target;
+        target.takeDamage(u.def.atk);
+        target.addThreat(u, u.def.atk);
+        this.effects.push({
+          type: 'attack', from: { ...u.pos }, to: { ...target.pos },
+          color: '#22d3ee', life: 0.15,
+        });
+      }
+    }
+  }
+
+  // Wisp: fast, fragile swarm. Same boids behavior as bats but faster and
+  // lighter, so it zips around and harasses the back line.
+  _updateWisp(u, dt) {
+    this._updateBat(u, dt);
+  }
+
   _pickBatTarget(u, enemies) {
     // A taunted bat is forced onto its taunter (highest threat) regardless of
     // squishiness or distance, so taunt actually holds aggro.
@@ -1126,13 +1548,21 @@ export class Sim {
     // Score all enemies: prefer squishy (low-HP / low-armor) and low-HP, but
     // threat (from taunt) is a strong override so a taunted unit pulls aggro.
     const bias = CONFIG.threat.backlineBias;
+    // Per-unit desync: bats remember which enemy they last chose and hold onto
+    // it unless another target beats it by a small margin. Without this every
+    // bat scores the same squishy target each frame, so the whole swarm
+    // converges on one point instead of spreading out.
+    const lastTargetId = u.target && u.target.alive ? u.target.id : null;
+    const stickiness = CONFIG.boids.targetStickiness;
     let best = null, bestScore = -Infinity;
     for (const e of enemies) {
       const d = dist(u.pos, e.pos);
       const hpFrac = e.hp / e.maxHp;
       const squishy = e.armor <= 0 ? bias : 0;
       const threat = u.threat.get(e.id) ?? 0;
-      const score = -d + squishy + (1 - hpFrac) * 5 + threat;
+      let score = -d + squishy + (1 - hpFrac) * 5 + threat;
+      // Bias toward the current target so it keeps committing to one enemy.
+      if (e.id === lastTargetId) score += stickiness;
       if (score > bestScore) { bestScore = score; best = e; }
     }
     return best;
@@ -1215,6 +1645,16 @@ export class Sim {
   // --- Shared movement / combat ---
 
   _moveAlongPath(u, goal, dt) {
+    // Build a set of cells occupied by other units so pathfinding routes
+    // around teammates instead of walking through them. Only units that are
+    // actually standing in a cell count; the moving unit itself is excluded.
+    const occupied = new Set();
+    for (const o of this.units) {
+      if (o === u || !o.alive) continue;
+      const cell = this.grid.worldToCell(o.pos);
+      occupied.add(this.grid.idx(cell.c, cell.r));
+    }
+
     // Recompute the path only when the goal has moved meaningfully or the
     // current path is exhausted. Re-running A* every frame (e.g. while
     // following a moving leader) causes visible stutter and constant
@@ -1222,8 +1662,18 @@ export class Sim {
     const needRepath =
       !u.path || u.pathIndex >= u.path.length ||
       !u.pathGoal || dist(u.pathGoal, goal) > CONFIG.team.repathDistance;
+    // If a straight line to the goal is clear, snap back to LOS and drop the
+    // A* waypoints. This lets units cut corners the moment an obstacle stops
+    // blocking them instead of walking the full grid path.
+    if (!needRepath && this.grid._lineClear(
+      this.grid.worldToCell(u.pos).c, this.grid.worldToCell(u.pos).r,
+      this.grid.worldToCell(goal).c, this.grid.worldToCell(goal).r, occupied)) {
+      u.path = [goal];
+      u.pathIndex = 0;
+      u.pathGoal = { ...goal };
+    }
     if (needRepath) {
-      u.path = this.grid.findPath(u.pos, goal);
+      u.path = this.grid.findPath(u.pos, goal, occupied);
       u.pathIndex = 0;
       u.pathGoal = { ...goal };
       if (!u.path) { u.vel = { x: 0, y: 0 }; return; }
@@ -1264,6 +1714,9 @@ export class Sim {
     this._setVel(u, { x: dx, y: dy }, dt);
   }
 
+  // Record a human-readable intent for the debug overlay.
+  _intent(u, msg) { u.intent = msg; }
+
   // Smoothly accelerate toward a desired velocity instead of snapping to it.
   // This removes the jitter caused by instant velocity changes each step.
   _setVel(u, desired, dt) {
@@ -1294,5 +1747,121 @@ export class Sim {
     if (steer.x !== 0 || steer.y !== 0) {
       this._setVel(u, clampLen(add(u.vel, scale(steer, t.separationWeight)), u.effSpeed), dt);
     }
+  }
+
+  // Scatter: spread the team out so a clustered enemy AOE can't hit everyone
+  // at once. Each member pushes away from nearby allies and from the enemy
+  // cluster, while still keeping the enemy in attack range.
+  _scatter(u, allies, enemies, dt) {
+    const t = CONFIG.team;
+    let steer = { x: 0, y: 0 };
+
+    // Push away from nearby allies.
+    for (const a of allies) {
+      if (a === u || !a.alive) continue;
+      const d = dist(u.pos, a.pos);
+      if (d > 0 && d < t.scatterRadius) {
+        const diff = norm(sub(u.pos, a.pos));
+        const strength = 1 - d / t.scatterRadius;
+        steer = add(steer, scale(diff, strength));
+      }
+    }
+
+    // Push away from the enemy cluster center.
+    if (enemies.length > 0) {
+      let cx = 0, cy = 0;
+      for (const e of enemies) { cx += e.pos.x; cy += e.pos.y; }
+      cx /= enemies.length; cy /= enemies.length;
+      const toCluster = sub(u.pos, { x: cx, y: cy });
+      const dC = len(toCluster);
+      if (dC > 0 && dC < t.scatterClusterRadius) {
+        steer = add(steer, scale(norm(toCluster), 1 - dC / t.scatterClusterRadius));
+      }
+    }
+
+    if (steer.x !== 0 || steer.y !== 0) {
+      this._setVel(u, clampLen(add(u.vel, scale(steer, t.scatterWeight)), u.effSpeed), dt);
+    } else {
+      // Already spread out: hold position.
+      u.vel = { x: 0, y: 0 };
+    }
+  }
+
+  // --- Team banter ---
+  // Members occasionally speak based on what they're thinking and doing. A
+  // line is chosen from the situation pool, the speaker's name (and target's)
+  // are substituted, and it's shown as a speech bubble. Lines are throttled by
+  // a global cooldown so the team doesn't chatter constantly.
+
+  // Age out expired speech bubbles.
+  _updateBubbles(dt) {
+    for (let i = this.bubbles.length - 1; i >= 0; i--) {
+      this.bubbles[i].life -= dt;
+      if (this.bubbles[i].life <= 0) this.bubbles.splice(i, 1);
+    }
+    // Tick each unit's per-unit speak cooldown and think timer.
+    for (const u of this.playerUnits) {
+      if (u.speakCooldown > 0) u.speakCooldown = Math.max(0, u.speakCooldown - dt);
+      if (u.thinkTimer > 0) u.thinkTimer = Math.max(0, u.thinkTimer - dt);
+    }
+  }
+
+  // Emit a dialogue line for a unit. Called at the moment the situation is
+  // actually happening (a heal, a kill, an ally falling, etc.), so lines are
+  // always relevant. Throttled per-unit and globally so the team doesn't
+  // chatter constantly.
+  _say(u, key, target) {
+    if (!u || !u.alive) return;
+    if (u.speakCooldown > 0) return;
+    if (this.time < this._nextBubbleAt) return;
+    const d = CONFIG.dialogue;
+    if (Math.random() > d.chance) return;
+    const pool = d.lines[key] || d.lines.idle;
+    if (pool.length === 0) return;
+    const line = pool[Math.floor(Math.random() * pool.length)]
+      .replace(/\{name\}/g, u.displayName)
+      .replace(/\{target\}/g, (target && target.alive ? target.displayName : 'them'));
+
+    this.bubbles.push({ unitId: u.id, text: line, life: d.bubbleLife });
+    // Keep only the most recent bubbles on screen.
+    if (this.bubbles.length > d.maxLines) this.bubbles.shift();
+    u.speakCooldown = d.cooldown;
+    this._nextBubbleAt = this.time + d.cooldown;
+  }
+
+  // Occasional "thinking" line based on what the unit is currently doing.
+  // Fires on a slow per-unit timer so the team talks regularly without
+  // spamming, and always reflects the unit's actual current action.
+  _think(u) {
+    if (u.thinkTimer > 0) return;
+    if (u.speakCooldown > 0) return;
+    if (this.time < this._nextBubbleAt) return;
+    // Out of mana: the healer can't heal, so it says so.
+    if (u.maxMana > 0 && u.mana < u.manaCost) {
+      this._say(u, 'outOfMana');
+      return;
+    }
+    // Low mana: the healer is running dry but can still cast.
+    if (u.maxMana > 0 && u.mana < u.maxMana * 0.5) {
+      this._say(u, 'lowMana');
+      u.thinkTimer = CONFIG.dialogue.thinkInterval;
+      return;
+    }
+    // No enemies left: the team notices the room is clear.
+    if (this.enemyUnits.every(e => !e.alive)) {
+      this._say(u, 'noEnemies');
+      u.thinkTimer = CONFIG.dialogue.thinkInterval;
+      return;
+    }
+    const intent = u.intent || '';
+    let key = 'idle';
+    if (intent.includes('advanc')) key = 'advancing';
+    else if (intent.includes('attack') || intent.includes('shoot') || intent.includes('charge')) key = 'attacking';
+    else if (intent.includes('kite') || intent.includes('backing off')) key = 'kiting';
+    else if (intent.includes('guard')) key = 'guarding';
+    else if (intent.includes('hunt')) key = 'hunting';
+    this._say(u, key);
+    // Reset the think timer so this unit doesn't chatter again soon.
+    u.thinkTimer = CONFIG.dialogue.thinkInterval;
   }
 }
