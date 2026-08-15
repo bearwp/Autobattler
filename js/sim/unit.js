@@ -12,8 +12,10 @@ export class Unit {
     this.def = def;                 // member bundle (CONFIG.members[i]) or CONFIG.bat
     this.team = opts.team;          // 'player' | 'enemy'
     this.isBat = opts.team === 'enemy';
+    this.personality = def.personality || 'stoic'; // drives flavor of banter lines
     this.pos = { ...opts.pos };
     this.vel = { x: 0, y: 0 };
+    this.knockback = { x: 0, y: 0 }; // impulse from being hit; decays each step
     this.facing = opts.facing ?? 0;   // radians, smoothed toward movement direction
     this.wanderPhase = Math.random() * Math.PI * 2; // per-unit idle drift offset
 

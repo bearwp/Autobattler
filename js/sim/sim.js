@@ -211,6 +211,7 @@ export class Sim {
     const moves = ['keepDistance', 'kite', 'evade', 'follow', 'advance'];
     const rules = ['lowestHp', 'highestHp', 'closest', 'strongest', 'weakest', 'mostAtOnce', 'threatened'];
     const modPool = ['taunt', 'lifesteal', 'pierce', 'slow', 'peel', 'evasive'];
+    const personalities = ['stoic', 'cocky', 'cautious', 'cheerful', 'grumpy', 'nervous'];
 
     const type = atkTypes[Math.floor(Math.random() * atkTypes.length)];
     const shape = atkShapes[Math.floor(Math.random() * atkShapes.length)];
@@ -238,6 +239,7 @@ export class Sim {
       target: { side: type === 'heal' ? 'ally' : 'enemy', rule: rules[Math.floor(Math.random() * rules.length)] },
       movement: moves[Math.floor(Math.random() * moves.length)],
       leader: false,
+      personality: personalities[Math.floor(Math.random() * personalities.length)],
     };
   }
 
@@ -284,6 +286,9 @@ export class Sim {
     this._saidEliteFight = false;
     this._queueTeam();
     this._spawnBats(node);
+    // Mana refreshes at the start of every round so casters can use their
+    // abilities each fight rather than only after resting.
+    this._refillMana();
   }
 
   // Team enters through the left door one by one.
@@ -468,8 +473,10 @@ export class Sim {
     // Integrate positions.
     for (const u of this.units) {
       if (!u.alive) continue;
-      u.pos.x += u.vel.x * dt;
-      u.pos.y += u.vel.y * dt;
+      u.pos.x += (u.vel.x + u.knockback.x) * dt;
+      u.pos.y += (u.vel.y + u.knockback.y) * dt;
+      // Knockback decays quickly so it's a short shove, not a permanent drift.
+      u.knockback = scale(u.knockback, Math.max(0, 1 - dt * CONFIG.combat.knockbackDecay));
       this._clampToWorld(u);
       this._smoothFacing(u, dt);
     }
@@ -1202,17 +1209,22 @@ export class Sim {
   // Where a member heads when there's nothing to fight. The leader leads
   // toward the exit; everyone else trails behind the leader so the leader
   // stays in front instead of being overtaken by the back line. Followers
-  // spread into a line (by formation slot) so they don't all stack on the
-  // same point and clump together.
+  // fan out into a compact wedge behind the leader (by formation slot) so
+  // they don't all stack on the same point, clump together, or stretch into
+  // an unwieldy single-file line when the party is large.
   _advanceGoal(u) {
     const leader = this.playerUnits.find(a => a.alive && a.isLeader);
     if (!leader || u.isLeader) return this._exitGoal();
     const back = norm(sub(leader.pos, this._exitGoal()));
     const t = CONFIG.team;
-    // Offset each follower sideways by its slot so the line fans out.
+    // Fan followers out behind the leader: the first sits directly behind,
+    // and each later slot swings further out to the side, forming a wedge
+    // that stays tight around the leader no matter how many members there are.
+    const i = u.slot - 1; // 0 for the first follower
+    const angle = i * t.formationWedge;
     const side = { x: -back.y, y: back.x };
-    const spread = (u.slot - 1) * t.formationSpread;
-    return add(add(leader.pos, scale(back, t.followDistance)), scale(side, spread));
+    const dir = norm(add(scale(back, Math.cos(angle)), scale(side, Math.sin(angle))));
+    return add(leader.pos, scale(dir, t.followDistance));
   }
 
   _resolveAttacks(u, target, enemies, allies) {
@@ -1358,6 +1370,7 @@ export class Sim {
     if (shape === 'rangeOneShot' || shape === 'meleeOneShot') {
       target.takeDamage(dmg);
       target.addThreat(u, dmg);
+      this._knockback(target, u.pos, CONFIG.combat.knockback);
       this.effects.push({
         type: 'attack', from: { ...u.pos }, to: { ...target.pos },
         color: u.team === 'player' ? '#fbbf24' : '#f87171', life: 0.15,
@@ -1374,6 +1387,7 @@ export class Sim {
         if (dist(center, e.pos) <= range) {
           e.takeDamage(dmg);
           e.addThreat(u, dmg);
+          this._knockback(e, center, CONFIG.combat.knockback);
           hit = true;
         }
       }
@@ -1399,6 +1413,7 @@ export class Sim {
         if (angle <= arc / 2) {
           e.takeDamage(dmg);
           e.addThreat(u, dmg);
+          this._knockback(e, u.pos, CONFIG.combat.knockback);
           hit = true;
         }
       }
@@ -1415,6 +1430,7 @@ export class Sim {
     u.secondaryTimer = CONFIG.secondary.cooldown;
     target.takeDamage(CONFIG.secondary.atk);
     target.addThreat(u, CONFIG.secondary.atk);
+    this._knockback(target, u.pos, CONFIG.combat.knockback);
     this.effects.push({
       type: 'attack', from: { ...u.pos }, to: { ...target.pos },
       color: u.team === 'player' ? '#fbbf24' : '#f87171', life: 0.15,
@@ -1463,6 +1479,7 @@ export class Sim {
         u.target = target;
         target.takeDamage(u.def.atk);
         target.addThreat(u, u.def.atk);
+        this._knockback(target, u.pos, CONFIG.combat.knockback);
         this.effects.push({
           type: 'attack', from: { ...u.pos }, to: { ...target.pos },
           color: '#f87171', life: 0.15,
@@ -1490,6 +1507,7 @@ export class Sim {
         u.target = target;
         target.takeDamage(u.def.atk);
         target.addThreat(u, u.def.atk);
+        this._knockback(target, u.pos, CONFIG.combat.knockback);
         this.effects.push({
           type: 'attack', from: { ...u.pos }, to: { ...target.pos },
           color: '#f87171', life: 0.15,
@@ -1524,6 +1542,7 @@ export class Sim {
         u.target = target;
         target.takeDamage(u.def.atk);
         target.addThreat(u, u.def.atk);
+        this._knockback(target, u.pos, CONFIG.combat.knockback);
         this.effects.push({
           type: 'attack', from: { ...u.pos }, to: { ...target.pos },
           color: '#22d3ee', life: 0.15,
@@ -1730,6 +1749,13 @@ export class Sim {
     }
   }
 
+  // Apply a knockback impulse to a unit, pushing it away from `from`.
+  _knockback(u, from, strength) {
+    if (!u.alive) return;
+    const dir = norm(sub(u.pos, from));
+    u.knockback = add(u.knockback, scale(dir, strength));
+  }
+
   _separate(u, allies, dt) {
     const t = CONFIG.team;
     let steer = { x: 0, y: 0 };
@@ -1816,7 +1842,10 @@ export class Sim {
     if (this.time < this._nextBubbleAt) return;
     const d = CONFIG.dialogue;
     if (Math.random() > d.chance) return;
-    const pool = d.lines[key] || d.lines.idle;
+    // Prefer the speaker's personality take on this situation; fall back to
+    // the generic pool so every situation still has a line.
+    const persona = d.lines.personality && d.lines.personality[u.personality];
+    const pool = (persona && persona[key]) || d.lines[key] || d.lines.idle;
     if (pool.length === 0) return;
     const line = pool[Math.floor(Math.random() * pool.length)]
       .replace(/\{name\}/g, u.displayName)
@@ -1849,7 +1878,10 @@ export class Sim {
     }
     // No enemies left: the team notices the room is clear.
     if (this.enemyUnits.every(e => !e.alive)) {
-      this._say(u, 'noEnemies');
+      // If the unit is just standing around (not advancing), trade relaxed
+      // quiet banter; otherwise note the room is clear and move on.
+      const intent = u.intent || '';
+      this._say(u, intent.includes('advanc') ? 'noEnemies' : 'quiet');
       u.thinkTimer = CONFIG.dialogue.thinkInterval;
       return;
     }

@@ -62,6 +62,7 @@ const SHAPE_LABELS = {
 };
 const MOVE_LABELS = { keepDistance: 'Keep distance', kite: 'Kite', evade: 'Evade', follow: 'Follow', advance: 'Advance', flank: 'Flank', charge: 'Charge', guard: 'Guard', hunt: 'Hunt' };
 const RULE_LABELS = { lowestHp: 'Lowest HP', highestHp: 'Highest HP', closest: 'Closest', strongest: 'Strongest', weakest: 'Weakest', mostAtOnce: 'Most at once', threatened: 'Threatened' };
+const PERSONALITIES = ['stoic', 'cocky', 'cautious', 'cheerful', 'grumpy', 'nervous'];
 
 function modifierChips(mods) {
   return mods.map(mid => {
@@ -120,6 +121,7 @@ function memberCard(m) {
         <div class="chip move" title="Movement">
           <span class="chip-emoji">🏃</span>
           <select class="mmove">${optionList('move', MOVEMENTS, ['Hold', 'Keep distance', 'Kite', 'Evade', 'Follow', 'Advance', 'Flank', 'Charge', 'Guard', 'Hunt'], m.movement)}</select>
+          <select class="mpersonality" title="Personality">${optionList('personality', PERSONALITIES, ['Stoic', 'Cocky', 'Cautious', 'Cheerful', 'Grumpy', 'Nervous'], m.personality)}</select>
           <label class="leader-toggle"><input class="mleaderchk" type="checkbox" ${m.leader ? 'checked' : ''} /> Leader</label>
         </div>
 
@@ -182,6 +184,7 @@ function readMembers() {
       target: { side: str('.mtside'), rule: str('.mtrule') },
       movement: str('.mmove'),
       leader: card.querySelector('.mleaderchk').checked,
+      personality: str('.mpersonality') || 'stoic',
     });
   });
   return members;
@@ -207,6 +210,7 @@ function addMember() {
     target: { side: 'enemy', rule: 'closest' },
     movement: 'advance',
     leader: false,
+    personality: 'stoic',
   };
   sim.members.push(m);
   const div = document.createElement('div');

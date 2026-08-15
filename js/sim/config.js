@@ -78,7 +78,7 @@ export const CONFIG = {
       modifiers: ['peel'],
       selfPreservation: [],
       target: { side: 'enemy', rule: 'closest' },
-      movement: 'advance', leader: true,
+      movement: 'advance', leader: true, personality: 'stoic',
     },
     {
       id: 'm2', name: 'Soldier', color: '#ef4444', shape: 'square',
@@ -87,7 +87,7 @@ export const CONFIG = {
       modifiers: ['lifesteal'],
       selfPreservation: [],
       target: { side: 'enemy', rule: 'closest' },
-      movement: 'charge', leader: false,
+      movement: 'charge', leader: false, personality: 'cocky',
     },
     {
       id: 'm3', name: 'Archer', color: '#22c55e', shape: 'triangle',
@@ -96,7 +96,7 @@ export const CONFIG = {
       modifiers: ['pierce'],
       selfPreservation: ['hide'],
       target: { side: 'enemy', rule: 'lowestHp' },
-      movement: 'kite', leader: false,
+      movement: 'kite', leader: false, personality: 'cautious',
     },
     {
       id: 'm4', name: 'Healer', color: '#f8fafc', shape: 'circle',
@@ -105,7 +105,7 @@ export const CONFIG = {
       modifiers: [],
       selfPreservation: ['hide'],
       target: { side: 'ally', rule: 'lowestHp' },
-      movement: 'keepDistance', leader: false,
+      movement: 'keepDistance', leader: false, personality: 'cheerful',
     },
   ],
 
@@ -179,6 +179,8 @@ export const CONFIG = {
   combat: {
     attackCooldown: 0.8,    // seconds between attacks
     minDamage: 1,
+    knockback: 3.2,        // impulse strength applied to a hit target
+    knockbackDecay: 6.0,   // how fast a knockback impulse fades (per second)
   },
 
   // Threat / aggro
@@ -197,6 +199,7 @@ export const CONFIG = {
     followDistance: 2.2,    // distance a follower trails behind its leader
     followHysteresis: 0.4,  // dead-zone so follow doesn't oscillate at the boundary
     formationSpread: 1.2,   // sideways spacing between followers in the advance line
+    formationWedge: 0.5,    // radians each follower swings out to the side behind the leader
     repathDistance: 1.0,    // goal must move this far before re-running A*
     keepDistance: 3.0,      // distance a keepDistance unit tries to hold
     kiteDistance: 3.0,      // distance at which a kite unit backs away
@@ -383,6 +386,15 @@ export const CONFIG = {
         '{name}: Quiet now.',
         '{name}: Onward.',
       ],
+      quiet: [
+        '{name}: Nice and quiet for once.',
+        '{name}: I could get used to this.',
+        '{name}: Anyone else hear that? No? Just me.',
+        '{name}: Reminds me of home.',
+        '{name}: Good weather for a walk.',
+        '{name}: I wonder what\'s for dinner.',
+        '{name}: This is the calm before the storm, I bet.',
+      ],
       idle: [
         '{name}: Stay sharp.',
         '{name}: Keep moving.',
@@ -441,6 +453,248 @@ export const CONFIG = {
         '{name}: Save me some mana!',
         '{name}: I\'m spent, no mana left!',
       ],
+      // Personality-flavored lines. Each personality has its own take on the
+      // same situations, so the team feels distinct. {name} and {target} are
+      // substituted as usual.
+      personality: {
+        stoic: {
+          idle: [
+            '{name}: Stay sharp.',
+            '{name}: Keep moving.',
+            '{name}: Quiet for now...',
+            '{name}: Eyes open.',
+            '{name}: Steady.',
+          ],
+          advancing: [
+            '{name}: Moving up.',
+            '{name}: Pushing forward.',
+            '{name}: On the move.',
+            '{name}: Advancing.',
+            '{name}: Keep pace.',
+          ],
+          attacking: [
+            '{name}: Engaging.',
+            '{name}: On them.',
+            '{name}: Take this.',
+            '{name}: Feel that.',
+          ],
+          killing: [
+            '{name}: One down.',
+            '{name}: Target eliminated.',
+            '{name}: Done.',
+          ],
+          lowHp: [
+            '{name}: I\'m hurt.',
+            '{name}: Wounded.',
+            '{name}: I can\'t take much more.',
+          ],
+          noEnemies: [
+            '{name}: All clear.',
+            '{name}: Nothing left here.',
+            '{name}: Onward.',
+          ],
+          quiet: [
+            '{name}: Peaceful.',
+            '{name}: I like the quiet.',
+            '{name}: Good. Time to think.',
+          ],
+        },
+        cocky: {
+          idle: [
+            '{name}: Try to keep up.',
+            '{name}: This is too easy.',
+            '{name}: Boring. Let\'s find a real fight.',
+            '{name}: I could do this all day.',
+          ],
+          advancing: [
+            '{name}: Let\'s go, slowpokes!',
+            '{name}: Move it!',
+            '{name}: I\'m already bored.',
+          ],
+          attacking: [
+            '{name}: Ha! Too easy!',
+            '{name}: Watch and learn!',
+            '{name}: Is that all you\'ve got?',
+            '{name}: I\'m just getting started!',
+          ],
+          killing: [
+            '{name}: Ha! Too easy.',
+            '{name}: Next!',
+            '{name}: Who\'s next?',
+            '{name}: I didn\'t even break a sweat.',
+          ],
+          lowHp: [
+            '{name}: They actually got me?!',
+            '{name}: This is nothing!',
+            '{name}: I\'m fine, I\'m fine!',
+          ],
+          noEnemies: [
+            '{name}: That was it?',
+            '{name}: Boring. Let\'s find a real fight.',
+            '{name}: I wanted more.',
+          ],
+          quiet: [
+            '{name}: Too quiet. I\'m bored.',
+            '{name}: This is the boring part.',
+            '{name}: I could take on ten more.',
+          ],
+        },
+        cautious: {
+          idle: [
+            '{name}: Careful, everyone.',
+            '{name}: Stay close.',
+            '{name}: Watch the shadows.',
+            '{name}: Something feels off...',
+          ],
+          advancing: [
+            '{name}: Slowly now.',
+            '{name}: Careful as we go.',
+            '{name}: Watch your step.',
+          ],
+          attacking: [
+            '{name}: Careful, it\'s dangerous!',
+            '{name}: Keep your guard up!',
+            '{name}: Don\'t get reckless!',
+          ],
+          killing: [
+            '{name}: One less to worry about.',
+            '{name}: Good. Stay alert.',
+            '{name}: Careful, there may be more.',
+          ],
+          lowHp: [
+            '{name}: I\'m hurt, be careful!',
+            '{name}: I need to fall back!',
+            '{name}: This is getting dangerous!',
+          ],
+          noEnemies: [
+            '{name}: All clear... for now.',
+            '{name}: Let\'s not linger.',
+            '{name}: Quiet. Too quiet.',
+          ],
+          quiet: [
+            '{name}: Too quiet. Something\'s coming.',
+            '{name}: I don\'t trust this calm.',
+            '{name}: Stay alert, everyone.',
+          ],
+        },
+        cheerful: {
+          idle: [
+            '{name}: What a lovely day for a fight!',
+            '{name}: We make a great team!',
+            '{name}: I\'m glad we\'re together!',
+            '{name}: Onward, friends!',
+          ],
+          advancing: [
+            '{name}: Let\'s go, team!',
+            '{name}: This is exciting!',
+            '{name}: Adventure awaits!',
+          ],
+          attacking: [
+            '{name}: Here we go!',
+            '{name}: Let\'s do this!',
+            '{name}: Yay, a fight!',
+            '{name}: We\'ve got this!',
+          ],
+          killing: [
+            '{name}: Great job, everyone!',
+            '{name}: We did it!',
+            '{name}: Nice work!',
+          ],
+          lowHp: [
+            '{name}: Ouch! But I\'m okay!',
+            '{name}: That hurt, but I\'ll be fine!',
+            '{name}: Don\'t worry about me!',
+          ],
+          noEnemies: [
+            '{name}: All clear, wonderful!',
+            '{name}: Great work, team!',
+            '{name}: On to the next!',
+          ],
+          quiet: [
+            '{name}: A peaceful moment!',
+            '{name}: I love these quiet times together.',
+            '{name}: Let\'s enjoy the calm!',
+          ],
+        },
+        grumpy: {
+          idle: [
+            '{name}: Hmph.',
+            '{name}: I\'m only here for the pay.',
+            '{name}: Don\'t talk to me.',
+            '{name}: This place stinks.',
+          ],
+          advancing: [
+            '{name}: Fine, let\'s go.',
+            '{name}: Hurry up.',
+            '{name}: Whatever.',
+          ],
+          attacking: [
+            '{name}: Get out of my way.',
+            '{name}: You again?',
+            '{name}: Annoying pests.',
+            '{name}: Just die already.',
+          ],
+          killing: [
+            '{name}: Finally.',
+            '{name}: About time.',
+            '{name}: One less nuisance.',
+          ],
+          lowHp: [
+            '{name}: Tch. I\'m hurt.',
+            '{name}: This is your fault.',
+            '{name}: I\'m bleeding. Great.',
+          ],
+          noEnemies: [
+            '{name}: Finally, some quiet.',
+            '{name}: About time.',
+            '{name}: Let\'s just go.',
+          ],
+          quiet: [
+            '{name}: Finally, some peace.',
+            '{name}: Don\'t ruin it.',
+            '{name}: Hmph. Fine.',
+          ],
+        },
+        nervous: {
+          idle: [
+            '{name}: Is it safe?',
+            '{name}: I don\'t like this...',
+            '{name}: What was that noise?',
+            '{name}: Please don\'t be a trap...',
+          ],
+          advancing: [
+            '{name}: Do we have to go this way?',
+            '{name}: Careful, careful...',
+            '{name}: I have a bad feeling...',
+          ],
+          attacking: [
+            '{name}: Oh no, oh no!',
+            '{name}: Please go away!',
+            '{name}: I don\'t want to fight!',
+            '{name}: Someone help!',
+          ],
+          killing: [
+            '{name}: Oh thank goodness.',
+            '{name}: It\'s gone, it\'s gone!',
+            '{name}: I didn\'t like that at all.',
+          ],
+          lowHp: [
+            '{name}: I\'m hurt, help!',
+            '{name}: This is bad, really bad!',
+            '{name}: I don\'t want to die!',
+          ],
+          noEnemies: [
+            '{name}: Is it really over?',
+            '{name}: Let\'s get out of here.',
+            '{name}: I need a moment...',
+          ],
+          quiet: [
+            '{name}: Is it safe to relax?',
+            '{name}: I don\'t like how quiet it is.',
+            '{name}: Can we leave now?',
+          ],
+        },
+      },
     },
   },
 };
