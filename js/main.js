@@ -62,7 +62,7 @@ const SHAPE_LABELS = {
 };
 const MOVE_LABELS = { keepDistance: 'Keep distance', kite: 'Kite', evade: 'Evade', follow: 'Follow', advance: 'Advance', flank: 'Flank', charge: 'Charge', guard: 'Guard', hunt: 'Hunt' };
 const RULE_LABELS = { lowestHp: 'Lowest HP', highestHp: 'Highest HP', closest: 'Closest', strongest: 'Strongest', weakest: 'Weakest', mostAtOnce: 'Most at once', threatened: 'Threatened' };
-const PERSONALITIES = ['stoic', 'cocky', 'cautious', 'cheerful', 'grumpy', 'nervous'];
+const PERSONALITIES = ['stoic', 'cocky', 'cautious', 'cheerful', 'grumpy', 'nervous', 'chatty'];
 
 function modifierChips(mods) {
   return mods.map(mid => {
@@ -474,7 +474,7 @@ const PLAY_DESC = {
   scatter: 'Spread out to avoid AOE',
 };
 
-let dbgTab = 'units'; // 'units' | 'bonds' | 'plays'
+let dbgTab = 'units'; // 'units' | 'bonds' | 'plays' | 'intel'
 
 // Toggle the debug side panel (button + D key stay in sync).
 function setDebug(on) {
@@ -529,6 +529,7 @@ function updateDebug() {
 
   if (dbgTab === 'units') renderDebugUnits();
   else if (dbgTab === 'bonds') renderDebugBonds();
+  else if (dbgTab === 'intel') renderDebugIntel();
   else renderDebugPlays();
 }
 
@@ -567,6 +568,18 @@ function unitCard(u) {
   const targetName = u.target && u.target.alive ? (u.target.def.name || 'target') : '—';
   const goal = u.path && u.path.length ? u.path[u.path.length - 1] : null;
   const goalTxt = goal ? `(${goal.x.toFixed(1)}, ${goal.y.toFixed(1)})` : '—';
+  // Intel avoid decision, if this member made one this frame.
+  let avoidHtml = '';
+  if (u.avoid) {
+    const a = u.avoid;
+    const action = a.action === 'retreat' ? 'Retreat' : 'Hold';
+    const flags = [
+      a.engaged ? 'engaged' : null,
+      a.outnumbered ? 'outnumbered' : null,
+      a.canEscape ? 'can-escape' : 'can\'t-escape',
+    ].filter(Boolean).join(' ');
+    avoidHtml = `<div class="dbg-row"><b>Avoid</b><span class="dbg-intent">${action} · danger ${a.danger.toFixed(0)} · ${flags} · ${a.reason}</span></div>`;
+  }
   return `
     <div class="dbg-unit" data-id="${u.id}">
       <div class="dbg-name">
@@ -578,6 +591,7 @@ function unitCard(u) {
       <div class="dbg-row"><b>Intent</b><span class="dbg-intent">${u.intent || '—'}</span></div>
       <div class="dbg-row"><b>Target</b><span class="dbg-target">${targetName}</span></div>
       <div class="dbg-row"><b>Goal</b><span class="dbg-goal">${goalTxt}</span></div>
+      ${avoidHtml}
     </div>`;
 }
 
@@ -631,6 +645,66 @@ function renderDebugPlays() {
   html += '<div class="dbg-section">Priority</div>';
   html += '<div class="dbg-play-row">Retreat → Hold → Scatter → Backline → Focus</div>';
   dbgBodyEl.innerHTML = html;
+}
+
+// Intel tab: the team's shared knowledge about enemy kinds (danger), plus each
+// member's personal familiarity and killability that drive the avoid/pounce
+// behavior.
+function renderDebugIntel() {
+  const alive = sim.playerUnits.filter(u => u.alive);
+  let html = '<div class="dbg-section">Team knowledge (shared)</div>';
+  const kinds = Object.entries(sim.intel).filter(([, r]) => r && r.hitsTaken > 0);
+  if (kinds.length === 0) {
+    html += '<div class="dbg-empty">The team knows nothing yet — get hit to learn</div>';
+  } else {
+    for (const [kind, r] of kinds) {
+      const avg = (r.dmgTaken / r.hitsTaken).toFixed(1);
+      html += `
+        <div class="dbg-row">
+          <b>${kind}</b>
+          <span>avg ${avg} dmg/hit (${r.hitsTaken} hits, ${r.dmgTaken} total)</span>
+        </div>`;
+    }
+  }
+
+  html += '<div class="dbg-section">Member familiarity</div>';
+  if (alive.length === 0) {
+    html += '<div class="dbg-empty">No members alive</div>';
+  } else {
+    for (const u of alive) {
+      const entries = Object.entries(u.intel).filter(([, r]) => r && (r.hitsTaken > 0 || r.hitsDealt > 0));
+      html += `
+        <div class="dbg-unit" data-id="${u.id}">
+          <div class="dbg-name">
+            <span class="dbg-swatch" style="background:${u.def.color}"></span>
+            ${u.def.name || 'unit'}
+          </div>`;
+      if (entries.length === 0) {
+        html += '<div class="dbg-row"><span class="dbg-intent">No personal experience yet</span></div>';
+      } else {
+        for (const [kind, r] of entries) {
+          const eff = sim.memberDanger(u, kind).toFixed(1);
+          html += `
+            <div class="dbg-row">
+              <b>${kind}</b>
+              <span>hit ${r.hitsTaken}x · dealt ${r.dmgDealt} (${r.hitsDealt}) · eff danger ${eff}</span>
+            </div>`;
+        }
+      }
+      html += '</div>';
+    }
+  }
+  dbgBodyEl.innerHTML = html;
+
+  // Hover a card to highlight the matching unit on the canvas.
+  dbgBodyEl.querySelectorAll('.dbg-unit').forEach(card => {
+    card.addEventListener('mouseenter', () => {
+      renderer.highlightId = parseInt(card.dataset.id, 10);
+    });
+    card.addEventListener('mouseleave', () => {
+      if (renderer.highlightId === parseInt(card.dataset.id, 10)) renderer.highlightId = null;
+    });
+  });
 }
 
 // --- Map overlay ---

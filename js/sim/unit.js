@@ -16,6 +16,7 @@ export class Unit {
     this.pos = { ...opts.pos };
     this.vel = { x: 0, y: 0 };
     this.knockback = { x: 0, y: 0 }; // impulse from being hit; decays each step
+    this.hitFlash = 0;            // 0..1 white damage flash; set by takeDamage, decays each step
     this.facing = opts.facing ?? 0;   // radians, smoothed toward movement direction
     this.wanderPhase = Math.random() * Math.PI * 2; // per-unit idle drift offset
 
@@ -60,6 +61,7 @@ export class Unit {
     this.kiteTimer = 0;
     this.slowTimer = 0;
     this.chargeReady = false;
+    this.avoid = null;        // last intel avoid decision: { action, danger, outnumbered, engaged, canEscape, reason } or null
     this.speakCooldown = 0;   // per-unit throttle for dialogue lines
     this.thinkTimer = 0;      // counts down to the next occasional "thinking" line
   }
@@ -84,6 +86,9 @@ export class Unit {
     const dmg = Math.max(CONFIG.combat.minDamage, amount - this.armor);
     this.hp -= dmg;
     this._tookDamage = true;
+    // Flash white when hit, proportional to the damage taken relative to max
+    // health: a big chunk flashes bright, a small tick only tints.
+    this.hitFlash = dmg / this.maxHp;
     if (this.hp <= 0) {
       this.hp = 0;
       this.alive = false;
@@ -107,6 +112,53 @@ export class Unit {
       if (v > bestVal) { bestVal = v; best = e; }
     }
     return best;
+  }
+
+  // --- Per-member intel ---
+  // Danger (how hard a kind hits) is shared team knowledge, held on the Sim.
+  // What stays personal here is (a) how much damage this member has dealt to
+  // each kind (drives killability / pounce) and (b) how many times this member
+  // has personally been hit by each kind (familiarity). Familiarity ramps how
+  // strongly the shared danger affects this member: a veteran is fully scared,
+  // a fresh recruit only mildly cautious even though it has heard the tank
+  // grunt. Both live on the member def so they persist across rooms.
+  get intel() {
+    if (!this.def.intel) this.def.intel = {};
+    return this.def.intel;
+  }
+
+  _intelRec(kind) {
+    const r = this.intel[kind] || (this.intel[kind] = { hitsTaken: 0, hitsDealt: 0, dmgDealt: 0 });
+    return r;
+  }
+
+  // Record that this member was personally hit by an enemy of `kind`. Only the
+  // count matters (familiarity); the damage itself feeds the shared pool.
+  recordHit(kind) {
+    this._intelRec(kind).hitsTaken++;
+  }
+
+  // Record damage this member dealt to an enemy of `kind`.
+  recordDeal(kind, dmg) {
+    const r = this._intelRec(kind);
+    r.hitsDealt++;
+    r.dmgDealt += dmg;
+  }
+
+  // How many times this member has personally been hit by `kind`. Used to ramp
+  // the shared danger so a recruit is less scared than a veteran.
+  familiarityOf(kind) {
+    const r = this.intel[kind];
+    return r ? r.hitsTaken : 0;
+  }
+
+  // Fraction of this enemy's max HP this member has personally chipped off.
+  // 0 means "never touched it" (unknowable / not vulnerable), 1 means "I've
+  // basically killed it myself."
+  killabilityOf(e) {
+    const r = this.intel[e.def.kind];
+    if (!r || e.maxHp <= 0) return 0;
+    return Math.min(1, r.dmgDealt / e.maxHp);
   }
 }
 

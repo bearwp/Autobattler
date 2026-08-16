@@ -28,6 +28,7 @@ export class Sim {
     this.restCandidates = []; // members offered at a rest point
     this._recruitSeq = 0;     // unique id counter for recruited members
     this.bonds = new Map();   // "idA|idB" (sorted) -> bond value, persists across rooms
+    this.intel = {};          // shared team knowledge: kind -> { hitsTaken, dmgTaken }, persists across rooms
     this.play = null;         // current leader-called play: { type, targetId, until }
     this.playsEnabled = false; // leader-called plays toggle (off by default)
     this.bubbles = [];        // active speech bubbles: { unitId, text, life }
@@ -41,6 +42,7 @@ export class Sim {
   _reset() {
     this.level = 1;
     this.deadIds = new Set();
+    this.intel = {};          // fresh run: the team forgets what it knew
     this._generateMap();
     this._enterNode(this.map.nodes[0].id);
   }
@@ -63,6 +65,37 @@ export class Sim {
     if (a === b) return;
     const key = this._bondKey(a, b);
     this.bonds.set(key, (this.bonds.get(key) ?? 0) + amount);
+  }
+
+  // --- Shared intel (team knowledge) ---
+  // Danger is shared: when any member gets hit by a kind, the whole team learns
+  // how hard that kind hits. Lives on the Sim so it persists across rooms (the
+  // team remembers brutes from the last room) and resets on a fresh run.
+
+  // Record that a member was hit by an enemy of `kind` for `dmg`.
+  recordSharedHit(kind, dmg) {
+    const r = this.intel[kind] || (this.intel[kind] = { hitsTaken: 0, dmgTaken: 0 });
+    r.hitsTaken++;
+    r.dmgTaken += dmg;
+  }
+
+  // Average damage this kind has dealt to the team per hit (0 if never seen).
+  sharedDanger(kind) {
+    const r = this.intel[kind];
+    if (!r || r.hitsTaken === 0) return 0;
+    return r.dmgTaken / r.hitsTaken;
+  }
+
+  // Effective danger of `kind` for a specific member: the shared team danger
+  // ramped by how personally familiar that member is with the kind. A veteran
+  // (many hits) is fully scared; a fresh recruit (zero hits) is only mildly
+  // cautious even though it has heard the tank grunt.
+  memberDanger(u, kind) {
+    const base = this.sharedDanger(kind);
+    if (base <= 0) return 0;
+    const fam = u.familiarityOf(kind);
+    const ramp = CONFIG.intel.familiarityRamp;
+    return base * (1 - ramp * Math.exp(-fam));
   }
 
   // Generate a Slay-the-Spire-style branching map: a start node, several
@@ -211,7 +244,7 @@ export class Sim {
     const moves = ['keepDistance', 'kite', 'evade', 'follow', 'advance'];
     const rules = ['lowestHp', 'highestHp', 'closest', 'strongest', 'weakest', 'mostAtOnce', 'threatened'];
     const modPool = ['taunt', 'lifesteal', 'pierce', 'slow', 'peel', 'evasive'];
-    const personalities = ['stoic', 'cocky', 'cautious', 'cheerful', 'grumpy', 'nervous'];
+    const personalities = ['stoic', 'cocky', 'cautious', 'cheerful', 'grumpy', 'nervous', 'chatty'];
 
     const type = atkTypes[Math.floor(Math.random() * atkTypes.length)];
     const shape = atkShapes[Math.floor(Math.random() * atkShapes.length)];
@@ -443,6 +476,9 @@ export class Sim {
       if (u.tauntTimer <= 0) u.taunted = false;
       u.kiteTimer = Math.max(0, u.kiteTimer - dt);
       u.slowTimer = Math.max(0, u.slowTimer - dt);
+      // Passive mana regen during combat so mana users (e.g. the healer)
+      // can keep casting without needing to rest constantly.
+      if (u.maxMana > 0) u.mana = Math.min(u.maxMana, u.mana + dt * CONFIG.combat.manaRegen);
       // Decay threat so taunt/heal aggro fades over time.
       for (const [id, v] of u.threat) {
         const nv = v - dt * CONFIG.threat.decayPerSec;
@@ -477,6 +513,8 @@ export class Sim {
       u.pos.y += (u.vel.y + u.knockback.y) * dt;
       // Knockback decays quickly so it's a short shove, not a permanent drift.
       u.knockback = scale(u.knockback, Math.max(0, 1 - dt * CONFIG.combat.knockbackDecay));
+      // The white damage flash fades out each step.
+      u.hitFlash = Math.max(0, u.hitFlash - dt * CONFIG.combat.hitFlashDecay);
       this._clampToWorld(u);
       this._smoothFacing(u, dt);
     }
@@ -854,9 +892,13 @@ export class Sim {
   }
 
   // Focus fire: prefer an enemy a bonded ally is already attacking, so the
-  // team concentrates damage. Falls back to the rule-picked target.
+  // team concentrates damage. Falls back to the rule-picked target. Also
+  // blends in per-member intel: a member pounces on an enemy it has personally
+  // softened (high killability) and shies away from one it knows hits hard
+  // (high danger) unless that enemy is already vulnerable.
   _focusFireTarget(u, target, enemies, allies) {
-    let best = null, bestScore = 0;
+    const it = CONFIG.intel;
+    let best = null, bestScore = -Infinity;
     for (const e of enemies) {
       if (!e.alive) continue;
       if (dist(u.pos, e.pos) > u.attack.range) continue;
@@ -865,6 +907,14 @@ export class Sim {
         if (a === u || !a.alive) continue;
         if (a.target === e) score += this._getBond(u, a) * CONFIG.synergy.focusBias;
       }
+      // Intel: pounce on what I've personally softened, avoid what the team
+      // knows hits hard (ramped by my own familiarity) unless it is already
+      // vulnerable (low HP).
+      const kill = u.killabilityOf(e);
+      const danger = this.memberDanger(u, e.def.kind);
+      const vulnerable = e.hp / e.maxHp < it.avoidHpFrac;
+      score += kill * it.pounceWeight;
+      if (danger > it.avoidDanger && !vulnerable) score -= danger * it.dangerWeight;
       if (score > bestScore) { bestScore = score; best = e; }
     }
     return best || target;
@@ -979,6 +1029,32 @@ export class Sim {
 
   _applyMovement(u, target, enemies, allies, dt) {
     const mv = u.movement;
+
+    // Intel-driven caution: a squishy member that has learned an enemy hits
+    // hard avoids diving in. It retreats when it can actually escape (or is
+    // being actively engaged / swarmed), and holds ground when fleeing is
+    // futile (slower than the target, or the target outranges it). Either way
+    // it doesn't charge into a fight it can't win. The decision (with its
+    // reasoning) is stored on the unit for the debug overlay.
+    const avoid = this._avoidDecision(u, target, enemies, allies);
+    u.avoid = avoid;
+    if (avoid && avoid.action === 'retreat') {
+      this._intent(u, 'backing off (dangerous enemy)');
+      this._say(u, 'avoiding', target);
+      const away = norm(sub(u.pos, target.pos));
+      const toExit = norm(sub(this._exitGoal(), u.pos));
+      const dir = norm(add(away, scale(toExit, 0.8)));
+      this._setVel(u, scale(dir, u.effSpeed), dt);
+      this._separate(u, allies, dt);
+      return;
+    }
+    if (avoid && avoid.action === 'hold') {
+      this._intent(u, 'holding ground (can\'t escape)');
+      this._say(u, 'holding', target);
+      this._idleWander(u, dt);
+      this._separate(u, allies, dt);
+      return;
+    }
 
     // Follow: follow the leader (or advance if no leader alive).
     if (mv === 'follow') {
@@ -1206,6 +1282,65 @@ export class Sim {
     u.vel = { x: 0, y: 0 };
   }
 
+  // Intel-driven caution: decide how a squishy member reacts to a dangerous
+  // target. Returns null (fight normally) or { action, danger, outnumbered,
+  // engaged, canEscape, reason }. Considers the target's learned danger, its
+  // HP, the member's own killability, whether a tank is absorbing, how
+  // outnumbered the member is, whether it is being actively engaged, and
+  // whether it can actually outrun or outrange the target. Healers never
+  // avoid (it's their job to stay back). Tanks tolerate far more danger
+  // before avoiding, but will still retreat if truly threatened.
+  _avoidDecision(u, target, enemies, allies) {
+    if (!target || !target.alive) return null;
+    const it = CONFIG.intel;
+    // Healers don't avoid.
+    if (u.attack.type === 'heal') return null;
+    // Only cautious when hurt.
+    if (u.hp / u.maxHp < it.avoidHpFrac) return null;
+    // Must have learned this kind hits hard (shared knowledge, ramped by
+    // personal familiarity). A ranged enemy's reach inflates its danger since
+    // it can hit from beyond the member's own range.
+    let danger = this.memberDanger(u, target.def.kind);
+    const outranged = target.def.range > u.attack.range;
+    if (outranged) danger *= it.rangeThreat;
+    // Tanks are built to absorb hits, so they need a much higher danger bar
+    // before they'll back off.
+    const isTank = u.armor >= it.tankArmor;
+    if (isTank) danger *= it.tankDangerMult;
+    if (danger <= it.avoidDanger) return null;
+    // Don't avoid if the target is already vulnerable (pounce instead).
+    if (target.hp / target.maxHp < it.avoidHpFrac) return null;
+    // If the member can actually finish the enemy, commit instead of fleeing.
+    if (u.killabilityOf(target) >= it.pounceKillFrac) return null;
+    // A tank absorbing the hits means it's safe to stay and fight.
+    const tankEngaging = allies.some(a => a.alive && a !== u && a.armor >= it.tankArmor &&
+      a.target && a.target.alive && a.target === target);
+    if (tankEngaging) return null;
+
+    // Outnumbered: too many enemies nearby to safely engage.
+    let nearby = 0;
+    for (const e of enemies) {
+      if (e === target) continue;
+      if (dist(u.pos, e.pos) <= it.swarmRadius) nearby++;
+    }
+    const outnumbered = nearby >= it.swarmCount;
+
+    // Actively engaged: an enemy is currently targeting this member.
+    const engaged = enemies.some(e => e.target === u);
+
+    // Can the member actually escape? It must be faster than the target, and
+    // the target must not outrange it (a ranged enemy can hit it while it
+    // flees, so running is pointless).
+    const canEscape = u.effSpeed > target.effSpeed * it.speedEscape && !outranged;
+
+    // Retreat when it can escape and is in real danger (engaged or swarmed).
+    // Otherwise hold ground rather than die running.
+    if (canEscape && (engaged || outnumbered)) {
+      return { action: 'retreat', danger, outnumbered, engaged, canEscape, reason: 'engaged/swarmed, can escape' };
+    }
+    return { action: 'hold', danger, outnumbered, engaged, canEscape, reason: 'can\'t escape' };
+  }
+
   // Where a member heads when there's nothing to fight. The leader leads
   // toward the exit; everyone else trails behind the leader so the leader
   // stays in front instead of being overtaken by the back line. Followers
@@ -1343,7 +1478,8 @@ export class Sim {
             if (perp < 0.8 && along < bestD) { bestD = along; behind = e; }
           }
           if (behind) {
-            behind.takeDamage(atk.atk * 0.7);
+            const dealt = behind.takeDamage(atk.atk * 0.7);
+            u.recordDeal(behind.def.kind, dealt);
             behind.addThreat(u, atk.atk * 0.7);
             this.effects.push({
               type: 'pierce', from: { ...u.pos }, to: { ...behind.pos }, life: 0.2,
@@ -1368,7 +1504,8 @@ export class Sim {
     if (u.chargeReady) u.chargeReady = false;
 
     if (shape === 'rangeOneShot' || shape === 'meleeOneShot') {
-      target.takeDamage(dmg);
+      const dealt = target.takeDamage(dmg);
+      u.recordDeal(target.def.kind, dealt);
       target.addThreat(u, dmg);
       this._knockback(target, u.pos, CONFIG.combat.knockback);
       this.effects.push({
@@ -1385,7 +1522,8 @@ export class Sim {
       for (const e of enemies) {
         if (!e.alive) continue;
         if (dist(center, e.pos) <= range) {
-          e.takeDamage(dmg);
+          const dealt = e.takeDamage(dmg);
+          u.recordDeal(e.def.kind, dealt);
           e.addThreat(u, dmg);
           this._knockback(e, center, CONFIG.combat.knockback);
           hit = true;
@@ -1411,7 +1549,8 @@ export class Sim {
         const dot = toE.x * dir.x + toE.y * dir.y;
         const angle = Math.acos(Math.max(-1, Math.min(1, dot)));
         if (angle <= arc / 2) {
-          e.takeDamage(dmg);
+          const dealt = e.takeDamage(dmg);
+          u.recordDeal(e.def.kind, dealt);
           e.addThreat(u, dmg);
           this._knockback(e, u.pos, CONFIG.combat.knockback);
           hit = true;
@@ -1428,7 +1567,8 @@ export class Sim {
 
   _doSecondaryAttack(u, target) {
     u.secondaryTimer = CONFIG.secondary.cooldown;
-    target.takeDamage(CONFIG.secondary.atk);
+    const dealt = target.takeDamage(CONFIG.secondary.atk);
+    u.recordDeal(target.def.kind, dealt);
     target.addThreat(u, CONFIG.secondary.atk);
     this._knockback(target, u.pos, CONFIG.combat.knockback);
     this.effects.push({
@@ -1477,7 +1617,9 @@ export class Sim {
       if (u.attackTimer <= 0) {
         u.attackTimer = CONFIG.combat.attackCooldown;
         u.target = target;
-        target.takeDamage(u.def.atk);
+        const dealt = target.takeDamage(u.def.atk);
+        target.recordHit(u.def.kind);
+        this.recordSharedHit(u.def.kind, dealt);
         target.addThreat(u, u.def.atk);
         this._knockback(target, u.pos, CONFIG.combat.knockback);
         this.effects.push({
@@ -1505,7 +1647,9 @@ export class Sim {
       if (u.attackTimer <= 0) {
         u.attackTimer = CONFIG.combat.attackCooldown;
         u.target = target;
-        target.takeDamage(u.def.atk);
+        const dealt = target.takeDamage(u.def.atk);
+        target.recordHit(u.def.kind);
+        this.recordSharedHit(u.def.kind, dealt);
         target.addThreat(u, u.def.atk);
         this._knockback(target, u.pos, CONFIG.combat.knockback);
         this.effects.push({
@@ -1540,7 +1684,9 @@ export class Sim {
       if (u.attackTimer <= 0) {
         u.attackTimer = CONFIG.combat.attackCooldown;
         u.target = target;
-        target.takeDamage(u.def.atk);
+        const dealt = target.takeDamage(u.def.atk);
+        target.recordHit(u.def.kind);
+        this.recordSharedHit(u.def.kind, dealt);
         target.addThreat(u, u.def.atk);
         this._knockback(target, u.pos, CONFIG.combat.knockback);
         this.effects.push({
@@ -1841,7 +1987,9 @@ export class Sim {
     if (u.speakCooldown > 0) return;
     if (this.time < this._nextBubbleAt) return;
     const d = CONFIG.dialogue;
-    if (Math.random() > d.chance) return;
+    // Chatty members speak more readily; quiet personalities hold back.
+    const talk = u.personality === 'chatty' ? 1.6 : (u.personality === 'stoic' || u.personality === 'grumpy' ? 0.5 : 1);
+    if (Math.random() > d.chance * talk) return;
     // Prefer the speaker's personality take on this situation; fall back to
     // the generic pool so every situation still has a line.
     const persona = d.lines.personality && d.lines.personality[u.personality];

@@ -178,9 +178,11 @@ export const CONFIG = {
   // Combat
   combat: {
     attackCooldown: 0.8,    // seconds between attacks
+    manaRegen: 8,           // mana restored per second during combat
     minDamage: 1,
     knockback: 3.2,        // impulse strength applied to a hit target
     knockbackDecay: 6.0,   // how fast a knockback impulse fades (per second)
+    hitFlashDecay: 2.0,    // how fast the white damage flash fades (per second)
   },
 
   // Threat / aggro
@@ -234,6 +236,27 @@ export const CONFIG = {
     scatterWeight: 2.5,       // strength of the scatter push
   },
 
+  // Intel: per-member learned knowledge about enemy kinds. Members only fear
+  // what they have personally experienced, so a fresh recruit dives in and
+  // learns the hard way. `danger` is the average damage a kind has dealt to
+  // this member; `killability` is how much of an enemy's HP this member has
+  // personally chipped off. The two combine into a target score: avoid a
+  // dangerous enemy at full HP, pounce on it once it is softened.
+  intel: {
+    avoidDanger: 18,        // avg hit damage above which a squishy member holds back
+    avoidHpFrac: 0.5,       // enemy HP fraction below which it is "vulnerable" (safe to engage)
+    pounceWeight: 2.0,      // how much killability weights target choice
+    dangerWeight: 1.0,      // how much learned danger weights target choice
+    familiarityRamp: 0.7,   // how strongly shared danger affects a member vs. its personal familiarity
+    pounceKillFrac: 0.4,    // killability above which a member finishes the enemy regardless of danger
+    swarmRadius: 3.0,       // enemies within this of the member count toward being outnumbered
+    swarmCount: 3,          // enemies within swarmRadius that make the member retreat
+    rangeThreat: 1.5,       // how much a ranged enemy's reach inflates its danger (can't outrun it)
+    speedEscape: 1.1,       // member speed must exceed target speed by this factor to flee effectively
+    tankArmor: 5,           // armor at/above which a member is a tank
+    tankDangerMult: 2.0,    // how much more danger a tank tolerates before avoiding
+  },
+
   // Synergy: persistent pair bonds between members. Bonds grow only from
   // coordinated action (focus fire, protect, heal) and from clearing a room
   // together. They have no stat effect; they bias the AI's decisions toward
@@ -253,11 +276,11 @@ export const CONFIG = {
   // doing. Lines are chosen by the unit's current situation and shown as a
   // speech bubble. `cooldown` is the minimum seconds between any two lines.
   dialogue: {
-    cooldown: 3.0,          // min seconds between lines
-    chance: 0.6,            // chance a unit speaks when its cooldown is ready
+    cooldown: 4.5,          // min seconds between lines
+    chance: 0.45,           // chance a unit speaks when its cooldown is ready
     maxLines: 3,            // max speech bubbles shown on screen at once
     bubbleLife: 2.4,        // seconds a bubble stays visible
-    thinkInterval: 12.0,    // seconds between a unit's occasional "thinking" lines
+    thinkInterval: 18.0,    // seconds between a unit's occasional "thinking" lines
     // Situation -> pool of lines. {name} is replaced with the speaker's name,
     // {target} with the target's name.
     lines: {
@@ -329,6 +352,22 @@ export const CONFIG = {
         '{name}: This isn\'t working, retreat!',
         '{name}: Everyone, back!',
         '{name}: We live to fight another day!',
+      ],
+      avoiding: [
+        '{name}: Not that one, it hits too hard!',
+        '{name}: I\'m not walking into that!',
+        '{name}: That thing would shred me!',
+        '{name}: Backing off, that one\'s dangerous!',
+        '{name}: I\'ve seen what that does, no thanks!',
+        '{name}: Let\'s soften it up first!',
+      ],
+      holding: [
+        '{name}: I can\'t outrun it, holding ground!',
+        '{name}: No point running, I\'ll hold!',
+        '{name}: Can\'t escape, so I\'ll stand my ground!',
+        '{name}: It\'s too fast, I\'ll fight here!',
+        '{name}: Nowhere to go, holding!',
+        '{name}: I\'ll hold it off as long as I can!',
       ],
       outnumbered: [
         '{name}: There\'s too many of them!',
@@ -498,6 +537,16 @@ export const CONFIG = {
             '{name}: I like the quiet.',
             '{name}: Good. Time to think.',
           ],
+          avoiding: [
+            '{name}: That one hits too hard. Withdrawing.',
+            '{name}: Not worth the risk. Falling back.',
+            '{name}: I\'ll engage when it\'s softened.',
+          ],
+          holding: [
+            '{name}: Can\'t escape. Holding position.',
+            '{name}: I\'ll hold here.',
+            '{name}: Standing my ground.',
+          ],
         },
         cocky: {
           idle: [
@@ -538,6 +587,16 @@ export const CONFIG = {
             '{name}: This is the boring part.',
             '{name}: I could take on ten more.',
           ],
+          avoiding: [
+            '{name}: Ha! I\'m not stupid enough for that one!',
+            '{name}: Even I know better than to dive in there!',
+            '{name}: Let it come to me, I\'m not charging that!',
+          ],
+          holding: [
+            '{name}: Can\'t run? Fine, I\'ll hold!',
+            '{name}: I\'ll stand here and take it!',
+            '{name}: Not backing down, even if I can\'t flee!',
+          ],
         },
         cautious: {
           idle: [
@@ -575,6 +634,16 @@ export const CONFIG = {
             '{name}: Too quiet. Something\'s coming.',
             '{name}: I don\'t trust this calm.',
             '{name}: Stay alert, everyone.',
+          ],
+          avoiding: [
+            '{name}: Careful, that one\'s dangerous!',
+            '{name}: Let\'s not rush into that one!',
+            '{name}: I\'m backing off, it hits too hard!',
+          ],
+          holding: [
+            '{name}: I can\'t outrun it, holding!',
+            '{name}: No escape, I\'ll hold my ground!',
+            '{name}: Staying put, it\'s too fast!',
           ],
         },
         cheerful: {
@@ -615,6 +684,16 @@ export const CONFIG = {
             '{name}: I love these quiet times together.',
             '{name}: Let\'s enjoy the calm!',
           ],
+          avoiding: [
+            '{name}: Ooh, that one\'s scary! Let\'s not!',
+            '{name}: I\'ll stay back, that one\'s mean!',
+            '{name}: No thank you, I\'m retreating!',
+          ],
+          holding: [
+            '{name}: I can\'t run, so I\'ll hold!',
+            '{name}: Stuck here, but I\'ll be brave!',
+            '{name}: I\'ll hold the line, friends!',
+          ],
         },
         grumpy: {
           idle: [
@@ -654,6 +733,16 @@ export const CONFIG = {
             '{name}: Don\'t ruin it.',
             '{name}: Hmph. Fine.',
           ],
+          avoiding: [
+            '{name}: Tch. Not walking into that.',
+            '{name}: I\'m not getting shredded for this.',
+            '{name}: Backing off. It\'s not worth it.',
+          ],
+          holding: [
+            '{name}: Can\'t escape. Great. Holding.',
+            '{name}: Stuck here. I\'ll hold.',
+            '{name}: No point running. I\'ll stand my ground.',
+          ],
         },
         nervous: {
           idle: [
@@ -692,6 +781,66 @@ export const CONFIG = {
             '{name}: Is it safe to relax?',
             '{name}: I don\'t like how quiet it is.',
             '{name}: Can we leave now?',
+          ],
+          avoiding: [
+            '{name}: Oh no, that one\'s dangerous! Backing off!',
+            '{name}: I\'m not going near that thing!',
+            '{name}: Retreating, retreating!',
+          ],
+          holding: [
+            '{name}: I can\'t run! I\'m holding, I\'m holding!',
+            '{name}: Stuck here, please don\'t hurt me!',
+            '{name}: I\'ll hold, but I don\'t like it!',
+          ],
+        },
+        chatty: {
+          idle: [
+            '{name}: So, anyone else think this place is creepy?',
+            '{name}: I had a dream about a giant bat last night.',
+            '{name}: Did you see that? No? Never mind.',
+            '{name}: I could talk for hours, you know.',
+            '{name}: Hey, tell me about your hometown!',
+          ],
+          advancing: [
+            '{name}: Ooh, moving up! Exciting!',
+            '{name}: Let\'s go, let\'s go!',
+            '{name}: I\'ve got a good feeling about this!',
+          ],
+          attacking: [
+            '{name}: Oh! Oh! My turn!',
+            '{name}: Look at me go!',
+            '{name}: Did you see that? I did that!',
+            '{name}: This is so much fun!',
+          ],
+          killing: [
+            '{name}: Did everyone see that?',
+            '{name}: That was me! I did that!',
+            '{name}: One down, and I\'m not even tired!',
+          ],
+          lowHp: [
+            '{name}: Ow! Hey, that hurt!',
+            '{name}: I\'m hurt! Someone, anyone!',
+            '{name}: This is not fun anymore!',
+          ],
+          noEnemies: [
+            '{name}: All clear! Great job, everyone!',
+            '{name}: We did it! Let\'s celebrate!',
+            '{name}: Onward, my friends!',
+          ],
+          quiet: [
+            '{name}: So quiet! Perfect for a chat!',
+            '{name}: I\'ve been meaning to tell you all something...',
+            '{name}: Anyone want to hear a story?',
+          ],
+          avoiding: [
+            '{name}: Ooh, that one looks mean! I\'m backing off!',
+            '{name}: Not today, scary thing! Retreating!',
+            '{name}: I\'ll let someone else poke that one!',
+          ],
+          holding: [
+            '{name}: Can\'t run, so I\'ll hold! And talk about it!',
+            '{name}: Stuck here! Anyone want to keep me company?',
+            '{name}: I\'ll hold, but I\'m not happy about it!',
           ],
         },
       },

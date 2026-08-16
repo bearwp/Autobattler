@@ -2,6 +2,15 @@
 
 import { CONFIG } from '../sim/config.js';
 
+// Linearly interpolate two hex colors toward a target, returning a CSS color.
+// Used to flash a unit's body white when it takes a hit.
+function mixColor(hex, target, t) {
+  const from = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16));
+  const to = [1, 3, 5].map(i => parseInt(target.slice(i, i + 2), 16));
+  const c = from.map((v, i) => Math.round(v + (to[i] - v) * t));
+  return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
+
 export class Renderer {
   constructor(canvas) {
     this.canvas = canvas;
@@ -169,7 +178,12 @@ export class Renderer {
       if (!u.alive) continue;
       const p = this._toScreen(u.pos);
       const s = u.size * this.scale;
-      ctx.fillStyle = u.def.color;
+      // Flash white when hit: the body colour lerps toward white, the mix
+      // proportional to the damage taken relative to max health. A big hit
+      // blazes bright; a small tick only tints.
+      ctx.fillStyle = u.hitFlash > 0
+        ? mixColor(u.def.color, '#ffffff', Math.min(1, u.hitFlash))
+        : u.def.color;
 
       // Rotate the shape to face the unit's smoothed heading.
       ctx.save();
@@ -259,24 +273,24 @@ export class Renderer {
       const p = this._toScreen(u.pos);
       const alpha = Math.max(0, Math.min(1, b.life / 0.5));
       ctx.globalAlpha = alpha;
-      ctx.font = '12px monospace';
+      ctx.font = '10px monospace';
       ctx.textAlign = 'center';
       const tw = ctx.measureText(b.text).width;
       const bx = p.x;
-      const by = p.y - u.size * this.scale / 2 - 26;
+      const by = p.y - u.size * this.scale / 2 - 20;
       // Bubble background with a small tail.
       ctx.fillStyle = 'rgba(0,0,0,0.75)';
       ctx.beginPath();
-      ctx.roundRect(bx - tw / 2 - 6, by - 14, tw + 12, 20, 4);
+      ctx.roundRect(bx - tw / 2 - 5, by - 12, tw + 10, 17, 3);
       ctx.fill();
       ctx.beginPath();
-      ctx.moveTo(bx - 4, by + 6);
-      ctx.lineTo(bx + 4, by + 6);
-      ctx.lineTo(bx, by + 12);
+      ctx.moveTo(bx - 3, by + 5);
+      ctx.lineTo(bx + 3, by + 5);
+      ctx.lineTo(bx, by + 10);
       ctx.closePath();
       ctx.fill();
       ctx.fillStyle = '#fff';
-      ctx.fillText(b.text, bx, by);
+      ctx.fillText(b.text, bx, by - 1);
       ctx.globalAlpha = 1;
     }
   }
