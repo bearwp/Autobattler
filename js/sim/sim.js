@@ -5,6 +5,7 @@ import { CONFIG } from './config.js';
 import { Grid } from './grid.js';
 import { Unit, pickTarget, nearestEnemy, threatenedEnemy, lowestHpAlly } from './unit.js';
 import { dist, len, norm, sub, add, scale, dot, clampLen, clamp } from './vec.js';
+import { completeRun, rollTavernRecruits, salaryOf } from '../meta.js';
 
 export class Sim {
   constructor() {
@@ -31,6 +32,8 @@ export class Sim {
     this.intel = {};          // shared team knowledge: kind -> { hitsTaken, dmgTaken }, persists across rooms
     this.play = null;         // current leader-called play: { type, targetId, until }
     this.playsEnabled = false; // leader-called plays toggle (off by default)
+    this.gold = 0;            // run gold earned from cleared rooms
+    this.tavernRecruits = []; // hires offered at rest points this run
     this.bubbles = [];        // active speech bubbles: { unitId, text, life }
     this._nextBubbleAt = 0;   // sim time when the next line may be spoken
     this._saidFirstBlood = false;
@@ -221,8 +224,6 @@ export class Sim {
       this.restCandidates = this._rollRecruits();
       this.started = false;
       this.over = null;
-      // Resting refills mana for units that use it (e.g. the healer).
-      this._refillMana();
       return;
     }
     this._startLevel(node);
@@ -240,7 +241,9 @@ export class Sim {
   // Generate a small pool of random members to offer at a rest point.
   _rollRecruits() {    const pool = [];
     for (let i = 0; i < 3; i++) {
-      pool.push(this._randomMember());
+      const m = this._randomMember();
+      m.salary = salaryOf(m);
+      pool.push(m);
     }
     return pool;
   }
@@ -297,8 +300,51 @@ export class Sim {
   recruitMember(candidateId) {
     const c = this.restCandidates.find(x => x.id === candidateId);
     if (!c) return;
+    if (c.salary > this.gold) return; // can't afford this hire
+    this.gold -= c.salary;
     this.members.push(c);
     this.restCandidates = this.restCandidates.filter(x => x.id !== candidateId);
+  }
+
+  // Shop actions at a rest point. Each spends run gold in exchange for an
+  // immediate boon, so rest becomes a "what do I need most right now" choice.
+  get restHealCost() { return CONFIG.economy.healCost; }
+  get restUpgradeCost() { return CONFIG.economy.upgradeCost; }
+
+  _memberByUnitId(uid) {
+    const u = this.units.find(x => x.id === uid);
+    if (!u || !u.def.stats) return null;
+    return u;
+  }
+
+  // Heal every living member to full HP for a gold cost.
+  restHealAll() {
+    if (this.gold < this.restHealCost) return false;
+    const any = this.playerUnits.some(u => u.alive && u.hp < u.maxHp);
+    if (!any) return false;
+    this.gold -= this.restHealCost;
+    for (const u of this.playerUnits) {
+      if (!u.alive) continue;
+      u.hp = u.maxHp;
+      if (u.def.stats) u.def.stats.currentHp = u.maxHp;
+    }
+    return true;
+  }
+
+  // Upgrade a member's primary attack (and max HP) for a gold cost.
+  restUpgrade(uid) {
+    if (this.gold < this.restUpgradeCost) return false;
+    const u = this._memberByUnitId(uid);
+    if (!u) return false;
+    this.gold -= this.restUpgradeCost;
+    const def = u.def;
+    def.attack.atk = Math.round((def.attack.atk || 0) * CONFIG.economy.upgradeAtkMult);
+    def.stats.hp = Math.round((def.stats.hp || 0) * CONFIG.economy.upgradeHpMult);
+    u.attack.atk = def.attack.atk;
+    u.maxHp = def.stats.hp;
+    u.hp = u.maxHp;
+    if (def.stats) def.stats.currentHp = u.maxHp;
+    return true;
   }
 
   // Leave the rest screen and open the map to choose the next node.
@@ -339,6 +385,15 @@ export class Sim {
     // Mana refreshes at the start of every round so casters can use their
     // abilities each fight rather than only after resting.
     this._refillMana();
+    // Snapshot each living member's entry HP so "restart room" replays this
+    // room from the same state the members walked in with.
+    this._roomEntryHp = {};
+    for (const m of this.members) {
+      if (this.deadIds.has(m.id)) continue;
+      // Ensure currentHp is a real number so the restart snapshot is valid.
+      if (m.stats && typeof m.stats.currentHp !== 'number') m.stats.currentHp = m.stats.hp;
+      this._roomEntryHp[m.id] = m.stats.currentHp;
+    }
   }
 
   // Team enters through the left door one by one.
@@ -453,12 +508,9 @@ export class Sim {
     return CONFIG.enemies.bat;
   }
 
-  // Treasure room: grant a permanent max-HP bonus to all living members.
+  // Treasure room: grant run gold (spent on the next rest / hires).
   _applyTreasure() {
-    for (const m of this.members) {
-      if (this.deadIds.has(m.id)) continue;
-      m.stats.hp += CONFIG.map.treasureHpBonus;
-    }
+    this.gold += CONFIG.economy.treasureGold;
   }
 
   start() {
@@ -469,6 +521,26 @@ export class Sim {
 
   reset() {
     this._reset();
+  }
+
+  // Replay the current combat room: spawn fresh units for the members at their
+  // HP from the start of this room. Only meaningful mid-fight (not on the map
+  // or at rest, and not after the run ends).
+  restartRoom() {
+    if (this.over || this.mapOpen || this.restOpen) return;
+    if (!this.currentNodeId) return;
+    const node = this.map.nodes.find(n => n.id === this.currentNodeId);
+    if (!node || node.type === 'rest' || node.type === 'start') return;
+    // Restore the members' HP to where they were when this room started, so
+    // the replay begins from the same situation (attrition from earlier rooms
+    // is preserved, but this room's damage is undone).
+    for (const m of this.members) {
+      if (!m.stats) continue;
+      const entry = this._roomEntryHp ? this._roomEntryHp[m.id] : null;
+      if (typeof entry === 'number') m.stats.currentHp = entry;
+    }
+    this._startLevel(node);
+    this.started = true;
   }
 
   // Advance the sim by one fixed timestep (dt in seconds).
@@ -592,6 +664,7 @@ export class Sim {
         // Record perma-death for team members.
         if (u.team === 'player') {
           this.deadIds.add(u.def.id);
+          if (u.def.stats) u.def.stats.currentHp = 0;
         }
       }
     }
@@ -717,7 +790,7 @@ export class Sim {
     // don't count as team members, so a lone minion can't prevent defeat.
     const realMembers = this.playerUnits.filter(u => u.def.kind !== 'minion');
     if (this._spawnQueue.length === 0 && realMembers.every(u => !u.alive)) {
-      this.over = 'lose';
+      this._endRun('lose');
       return;
     }
 
@@ -746,18 +819,36 @@ export class Sim {
       }
     }
 
+    // Persist HP so damage carries into the next room (attrition).
+    for (const u of this.playerUnits) {
+      if (u.def.stats) u.def.stats.currentHp = Math.max(0, u.hp);
+    }
+
+    // Reward the run for clearing the room.
+    this.gold += CONFIG.economy.goldPerClear;
+
     const node = this.map.nodes.find(n => n.id === this.currentNodeId);
     if (node && node.type === 'boss') {
-      this.over = 'win';
+      this._endRun('win');
       return;
     }
     const choices = this._nextChoices();
     if (choices.length === 0) {
-      this.over = 'win';
+      this._endRun('win');
       return;
     }
     this.mapOpen = true;
     this.started = false; // pause the sim while the map is shown
+  }
+
+  // The run is over: bank gold, promote survivors into the tavern pool, and
+  // return to the tavern to begin the next cycle.
+  _endRun(result) {
+    this.over = result;
+    const floor = this.currentNodeId
+      ? (this.map.nodes.find(n => n.id === this.currentNodeId)?.floor ?? this.level)
+      : this.level;
+    completeRun(this.members, this.deadIds, this.gold, floor, result);
   }
 
   // The player chose a node on the map; enter it.
@@ -1403,7 +1494,7 @@ export class Sim {
         this._separate(u, allies, dt);
         return;
       }
-      this._intent(u, 'advancing to exit');
+      this._intent(u, 'advancing into combat');
       this._moveAlongPath(u, goal, dt);
       this._separate(u, allies, dt);
       return;
@@ -1600,7 +1691,7 @@ export class Sim {
       return;
     }
     if (!target) {
-      this._intent(u, 'advancing to exit');
+      this._intent(u, 'advancing into combat');
       this._moveAlongPath(u, this._advanceGoal(u), dt);
       this._separate(u, allies, dt);
       return;
@@ -1707,6 +1798,23 @@ export class Sim {
   // they don't all stack on the same point, clump together, or stretch into
   // an unwieldy single-file line when the party is large.
   _advanceGoal(u) {
+    // If enemies are still alive, advance into the fight: move to a tactical
+    // position just outside attack range of the nearest enemy, so the member
+    // closes distance and engages instead of running to the door. Only head
+    // for the exit / formation when the room is actually clear.
+    const enemies = this.enemyUnits.filter(e => e.alive);
+    if (enemies.length > 0) {
+      const near = nearestEnemy(u, enemies);
+      if (near) {
+        const to = sub(near.pos, u.pos);
+        const d = len(to);
+        // Stand just outside attack range so the member can engage immediately
+        // on arrival, without walking into the enemy's face.
+        const desired = Math.max(0, d - u.attack.range * 0.5);
+        const dir = d > 0 ? scale(to, 1 / d) : { x: 0, y: 0 };
+        return add(u.pos, scale(dir, desired));
+      }
+    }
     const leader = this.playerUnits.find(a => a.alive && a.isLeader);
     if (!leader || u.isLeader) return this._exitGoal();
     const back = norm(sub(leader.pos, this._exitGoal()));
@@ -2138,8 +2246,18 @@ export class Sim {
     const wall = this._boidWallAvoidance(u);
 
     const b = CONFIG.boids;
-    let fx = sep.x * b.separationWeight + coh.x * b.cohesionWeight + ali.x * b.alignmentWeight + seek.x * b.seekWeight + wall.x * b.wallWeight;
-    let fy = sep.y * b.separationWeight + coh.y * b.cohesionWeight + ali.y * b.alignmentWeight + seek.y * b.seekWeight + wall.y * b.wallWeight;
+    // A taunted bat commits to its taunter: it charges straight in and ignores
+    // the scatter/cohesion forces that would otherwise let it drift away from
+    // a slow tank. Without this, separation (2.2) and wall (2.0) overwhelm the
+    // weak seek (0.7), so a fast bat endlessly kites a solo tank.
+    let fx, fy;
+    if (u.taunted) {
+      fx = seek.x * b.tauntSeekWeight + wall.x * b.wallWeight;
+      fy = seek.y * b.tauntSeekWeight + wall.y * b.wallWeight;
+    } else {
+      fx = sep.x * b.separationWeight + coh.x * b.cohesionWeight + ali.x * b.alignmentWeight + seek.x * b.seekWeight + wall.x * b.wallWeight;
+      fy = sep.y * b.separationWeight + coh.y * b.cohesionWeight + ali.y * b.alignmentWeight + seek.y * b.seekWeight + wall.y * b.wallWeight;
+    }
 
     const force = clampLen({ x: fx, y: fy }, b.maxForce);
     u.vel = clampLen(add(u.vel, scale(force, dt)), u.effSpeed);

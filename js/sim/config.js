@@ -372,7 +372,18 @@ export const CONFIG = {
     bossEscortCount: 8,     // number of escort enemies around the boss
     levelHpMult: 0.22,      // +HP% per level past 1 (compounding)
     levelAtkMult: 0.18,     // +ATK% per level past 1 (compounding)
-    treasureHpBonus: 10,    // permanent max-HP bonus from a treasure room
+    treasureHpBonus: 10,    // (legacy) permanent max-HP bonus from a treasure room
+  },
+
+  // Run economy: gold earned by clearing rooms and spent at rest points (heal,
+  // upgrade, or hire). Run gold is banked back into the tavern on completion.
+  economy: {
+    goldPerClear: 30,        // gold earned for clearing a room
+    treasureGold: 60,        // gold earned from a treasure room
+    healCost: 20,            // rest: heal the whole team to full
+    upgradeCost: 25,         // rest: boost one member's attack + max HP
+    upgradeAtkMult: 1.25,    // attack multiplier from one upgrade
+    upgradeHpMult: 1.15,     // max-HP multiplier from one upgrade
   },
 
   // Boids parameters (bats)
@@ -383,6 +394,7 @@ export const CONFIG = {
     cohesionWeight: 1.0,
     alignmentWeight: 0.6,
     seekWeight: 0.7,
+    tauntSeekWeight: 1.6,   // taunted bats charge their taunter, ignoring scatter
     wallWeight: 2.0,
     arrivalRadius: 1.5,     // bats ease off within this distance of their target
     targetStickiness: 1.5,  // score bonus to a bat's current target (desync)

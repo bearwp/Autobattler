@@ -24,6 +24,11 @@
     #hud .status.win { color: #4ade80; }
     #hud .status.lose { color: #f87171; }
     #hud .hint { color: #888; font-size: 12px; }
+    #hud .gold {
+      color: #fbbf24; font-weight: 700; font-size: 13px;
+      background: #2a2416; border: 1px solid #4a3f1d;
+      padding: 4px 10px; border-radius: 14px;
+    }
     #hud button {
       background: #2a2a35; color: #e0e0e0; border: 1px solid #3a3a45;
       padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 13px;
@@ -56,8 +61,17 @@
       display: flex; align-items: center; justify-content: center;
     }
     .member .info { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
-    .member .name { font-weight: 600; font-size: 12px; }
+    .member .name { font-weight: 600; font-size: 12px; display: flex; align-items: center; gap: 5px; }
+    .member .conf {
+      width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto;
+      background: #888; box-shadow: 0 0 4px currentColor;
+    }
     .member .ability { font-size: 10px; color: #888; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .member .status {
+      font-size: 10px; color: #cbd5e1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      min-height: 12px;
+    }
+    .member .status .st-target { color: #fbbf24; }
     .member .hpbar {
       width: 100%; height: 5px; background: #000; border-radius: 3px; overflow: hidden;
     }
@@ -331,6 +345,78 @@
       padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 13px;
     }
     #btn-finish-rest:hover { background: #2563eb; }
+    .gold-inline { color: #fbbf24; }
+    .rest-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+    .rest-action {
+      background: #2a2a35; color: #e0e0e0; border: 1px solid #3a3a45;
+      padding: 10px 14px; border-radius: 8px; cursor: pointer; font-size: 13px;
+      font-weight: 600;
+    }
+    .rest-action:hover { background: #3a3a45; }
+    .rest-action:disabled { opacity: 0.4; cursor: not-allowed; }
+    .rest-divider { height: 1px; background: #2a2a35; margin: 2px 0; }
+    .rest-upgrade-row { display: flex; flex-direction: column; gap: 6px; }
+    .rest-upgrade-list { display: flex; gap: 8px; flex-wrap: wrap; }
+    .rest-upgrade-chip {
+      background: #1e1e26; border: 1px solid #2a2a35; border-radius: 8px;
+      padding: 8px 12px; cursor: pointer; display: flex; align-items: center; gap: 8px;
+      font-size: 12px; color: #e0e0e0;
+    }
+    .rest-upgrade-chip:hover { border-color: #fbbf24; }
+    .rest-upgrade-chip .ru-icon { width: 20px; height: 20px; flex: 0 0 auto; }
+    .rest-upgrade-chip .ru-salary { color: #fbbf24; font-weight: 600; }
+
+    /* Tavern overlay */
+    #tavern-overlay {
+      position: fixed; inset: 0; z-index: 230;
+      background: rgba(0, 0, 0, 0.85);
+      display: flex; align-items: center; justify-content: center;
+    }
+    #tavern-overlay.hidden { display: none; }
+    .tavern-panel {
+      background: #1e1e26; border: 1px solid #3a3a45; border-radius: 12px;
+      padding: 20px 24px; max-width: 92vw; max-height: 92vh;
+      display: flex; flex-direction: column; gap: 12px; overflow: hidden;
+    }
+    .tavern-head { display: flex; align-items: center; gap: 12px; }
+    .tavern-head h3 { margin: 0; color: #e0e0e0; font-size: 18px; flex: 1; }
+    .tavern-gold { color: #fbbf24; font-weight: 700; font-size: 15px; }
+    .tavern-party { display: flex; flex-direction: column; gap: 6px; }
+    .tavern-for-hire { display: flex; flex-direction: column; gap: 6px; overflow-y: auto; }
+    .tavern-hire-grid { display: flex; gap: 10px; flex-wrap: wrap; }
+    .tavern-footer {
+      display: flex; align-items: center; gap: 12px;
+      border-top: 1px solid #2a2a35; padding-top: 12px;
+    }
+    .tavern-footer .roster-count { color: #aaa; font-size: 12px; flex: 1; }
+    .tavern-footer button.primary {
+      background: #1d4ed8; color: #fff; border: 1px solid #2563eb;
+      padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 13px;
+    }
+    .tavern-footer button.primary:hover { background: #2563eb; }
+    .tavern-footer #btn-tavern-reset {
+      background: #3a1d1d; color: #f87171; border: 1px solid #5a2a2a;
+      padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 13px;
+    }
+    .tavern-footer #btn-tavern-reset:hover { background: #5a2a2a; }
+    .tavern-hire-card {
+      background: #16161d; border: 1px solid #2a2a35; border-radius: 8px;
+      padding: 12px; display: flex; flex-direction: column; gap: 6px;
+      width: 170px;
+    }
+    .tavern-hire-card .th-head { display: flex; align-items: center; gap: 8px; }
+    .tavern-hire-card .th-head .icon { width: 22px; height: 22px; flex: 0 0 auto; }
+    .tavern-hire-card .th-name { color: #e0e0e0; font-weight: 600; font-size: 13px; }
+    .tavern-hire-card .th-stats { color: #888; font-size: 11px; }
+    .tavern-hire-card .th-attack { color: #aaa; font-size: 11px; }
+    .tavern-hire-card .th-buy {
+      margin-top: auto; background: #2a2a35; color: #fbbf24; border: 1px solid #4a3f1d;
+      border-radius: 6px; padding: 5px 0; font-size: 12px; cursor: pointer; font-weight: 600;
+    }
+    .tavern-hire-card .th-buy:hover { background: #3a341c; }
+    .tavern-hire-card .th-buy:disabled { opacity: 0.4; cursor: not-allowed; }
+    .tavern-hire-card.owned { border-color: #4ade80; }
+    .tavern-hire-card.owned .th-buy { background: #16211a; color: #4ade80; border-color: #2a4a35; cursor: default; }
 
     /* Debug side panel */
     #debug-panel {
@@ -414,12 +500,14 @@
   <div id="app">
     <div id="hud">
       <span class="status" id="status">Ready</span>
+      <span class="gold" id="gold-hud">🪙 0</span>
       <button id="btn-start">Start</button>
-      <button id="btn-restart">Restart</button>
+      <button id="btn-restart-room">Restart Room</button>
+      <button id="btn-restart-run">Restart Run</button>
       <button id="btn-debug" class="toggle" title="Toggle debug panel">Debug</button>
       <button id="btn-plays" class="toggle" title="Toggle leader-called plays">Plays</button>
       <button id="btn-pause" title="Pause/resume the sim">Pause</button>
-      <span class="hint">Space: start &nbsp;·&nbsp; R: reset &nbsp;·&nbsp; D: debug &nbsp;·&nbsp; P: pause</span>
+      <span class="hint">Space: start &nbsp;·&nbsp; R: reset room &nbsp;·&nbsp; D: debug &nbsp;·&nbsp; P: pause</span>
     </div>
     <div id="main-row">
       <div id="canvas-wrap">
@@ -478,9 +566,42 @@
     <div id="rest-overlay" class="hidden">
       <div class="rest-panel">
         <h3>Rest</h3>
-        <p class="rest-sub">A new ally offers to join your team.</p>
+        <p class="rest-sub">You have <b class="gold-inline" id="rest-gold">🪙 0</b> to spend. Spend it here — it is banked into your coffers when the run ends.</p>
+        <div class="rest-actions">
+          <button id="btn-rest-heal" class="rest-action">Rest &amp; Heal — 🪙 20</button>
+          <button id="btn-rest-upgrade" class="rest-action">Upgrade member — 🪙 25</button>
+        </div>
+        <div class="rest-upgrade-row hidden" id="rest-upgrade-row">
+          <span class="rest-sub">Choose a member to empower:</span>
+          <div id="rest-upgrade-members" class="rest-upgrade-list"></div>
+        </div>
+        <div class="rest-divider"></div>
+        <p class="rest-sub">A new ally offers to join your team (hires cost their salary):</p>
         <div id="rest-candidates"></div>
         <button id="btn-finish-rest" class="primary">Continue</button>
+      </div>
+    </div>
+    <div id="tavern-overlay" class="hidden">
+      <div class="tavern-panel">
+        <div class="tavern-head">
+          <h3>The Tavern</h3>
+          <span class="tavern-gold" id="tavern-gold">🪙 0</span>
+        </div>
+        <p class="roster-sub" id="tavern-sub">Hire adventurers to start a run. Your hero and survivors are always ready.</p>
+        <div class="tavern-party">
+          <span class="rest-sub">Your company (field on the next run):</span>
+          <div id="tavern-company" class="rest-upgrade-list"></div>
+        </div>
+        <div class="rest-divider"></div>
+        <div class="tavern-for-hire">
+          <span class="rest-sub">Adventurers looking for work:</span>
+          <div id="tavern-for-hire" class="tavern-hire-grid"></div>
+        </div>
+        <div class="tavern-footer">
+          <span class="roster-count" id="tavern-count"></span>
+          <button id="btn-tavern-reset" title="Wipe gold and company, back to a fresh start">Reset save</button>
+          <button id="btn-tavern-leave" class="primary">Start the run</button>
+        </div>
       </div>
     </div>
   </div>

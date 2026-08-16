@@ -3,6 +3,7 @@
 import { CONFIG, ATTACK_TYPES, TARGET_RULES, ATTACK_SHAPES, MOVEMENTS, SHAPES, MODIFIERS, SELF_PRESERVATION } from './sim/config.js';
 import { Sim } from './sim/sim.js';
 import { Renderer } from './render/renderer.js';
+import { getMeta, addGold, spendGold, salaryOf, startingHero, rollTavernRecruits, completeRun, resetMeta } from './meta.js';
 
 const canvas = document.getElementById('game');
 const statusEl = document.getElementById('status');
@@ -10,7 +11,8 @@ const teamUiEl = document.getElementById('team-ui');
 const customizerEl = document.getElementById('customizer');
 const memberListEl = document.getElementById('member-list');
 const btnStart = document.getElementById('btn-start');
-const btnRestart = document.getElementById('btn-restart');
+const btnRestartRoom = document.getElementById('btn-restart-room');
+const btnRestartRun = document.getElementById('btn-restart-run');
 const btnDebug = document.getElementById('btn-debug');
 const btnPlays = document.getElementById('btn-plays');
 const debugPanelEl = document.getElementById('debug-panel');
@@ -26,6 +28,20 @@ const rosterGridEl = document.getElementById('roster-grid');
 const rosterCountEl = document.getElementById('roster-count');
 const btnRosterClear = document.getElementById('btn-roster-clear');
 const btnRosterDone = document.getElementById('btn-roster-done');
+const goldHudEl = document.getElementById('gold-hud');
+const tavernOverlayEl = document.getElementById('tavern-overlay');
+const tavernGoldEl = document.getElementById('tavern-gold');
+const tavernSubEl = document.getElementById('tavern-sub');
+const tavernCompanyEl = document.getElementById('tavern-company');
+const tavernForHireEl = document.getElementById('tavern-for-hire');
+const tavernCountEl = document.getElementById('tavern-count');
+const btnTavernLeave = document.getElementById('btn-tavern-leave');
+const btnTavernReset = document.getElementById('btn-tavern-reset');
+const restGoldEl = document.getElementById('rest-gold');
+const btnRestHeal = document.getElementById('btn-rest-heal');
+const btnRestUpgrade = document.getElementById('btn-rest-upgrade');
+const restUpgradeRowEl = document.getElementById('rest-upgrade-row');
+const restUpgradeMembersEl = document.getElementById('rest-upgrade-members');
 
 const sim = new Sim();
 const renderer = new Renderer(canvas);
@@ -125,7 +141,7 @@ function memberCard(m) {
 
         <div class="chip move" title="Movement">
           <span class="chip-emoji">🏃</span>
-          <select class="mmove">${optionList('move', MOVEMENTS, ['Hold', 'Keep distance', 'Kite', 'Evade', 'Follow', 'Advance', 'Flank', 'Charge', 'Guard', 'Hunt'], m.movement)}</select>
+          <select class="mmove">${optionList('move', MOVEMENTS, ['Keep distance', 'Kite', 'Evade', 'Follow', 'Advance', 'Flank', 'Charge', 'Guard', 'Hunt'], m.movement)}</select>
           <select class="mpersonality" title="Personality">${optionList('personality', PERSONALITIES, ['Stoic', 'Cocky', 'Cautious', 'Cheerful', 'Grumpy', 'Nervous'], m.personality)}</select>
           <label class="leader-toggle"><input class="mleaderchk" type="checkbox" ${m.leader ? 'checked' : ''} /> Leader</label>
         </div>
@@ -390,8 +406,9 @@ function buildTeamUi() {
     root.innerHTML = `
       <div class="icon">${iconSvg(m)}</div>
       <div class="info">
-        <div class="name">${m.name}</div>
+        <div class="name"><span class="conf" title="Confidence"></span>${m.name}</div>
         <div class="ability">${m.attack.type} · ${m.attack.shape} · ${m.movement}</div>
+        <div class="status"></div>
         <div class="hpbar"><div class="hpfill"></div></div>
         <div class="stambar"><div class="stamfill"></div></div>
       </div>
@@ -401,6 +418,8 @@ function buildTeamUi() {
       root,
       hpfill: root.querySelector('.hpfill'),
       stamfill: root.querySelector('.stamfill'),
+      status: root.querySelector('.status'),
+      conf: root.querySelector('.conf'),
     });
   }
 }
@@ -453,6 +472,107 @@ function applyRoster() {
   buildTeamUi();
 }
 
+// --- Tavern (meta) ---
+// The persistent hub between runs: hire adventurers with banked gold, then
+// start a run with your company. Survivors return to the tavern afterwards.
+
+let tavernRecruits = rollTavernRecruits(6); // adventurers currently in the tavern
+
+function hireCard(m) {
+  const salary = m.salary ?? salaryOf(m);
+  return `
+    <div class="tavern-hire-card ${m._owned ? 'owned' : ''}" data-id="${m.id}">
+      <div class="th-head">
+        <div class="icon">${iconSvg(m)}</div>
+        <span class="th-name">${m.name}</span>
+      </div>
+      <div class="th-stats">HP ${m.stats.hp} · Arm ${m.stats.armor} · Spd ${m.stats.speed.toFixed(1)}</div>
+      <div class="th-attack">${ATK_TYPE_LABELS[m.attack.type]} · ${SHAPE_LABELS[m.attack.shape]} · ${MOVE_LABELS[m.movement]}</div>
+      ${m._owned ? '<div class="th-buy">Owned</div>'
+        : `<button class="th-buy" data-buy="${m.id}">Hire — 🪙 ${salary}</button>`}
+    </div>`;
+}
+
+function renderTavern() {
+  const meta = getMeta();
+  tavernGoldEl.textContent = '🪙 ' + meta.gold;
+  const owns = (id) => meta.heroes.some(h => h.id === id) || meta.known.some(k => k.id === id);
+
+  // Company already owned (fieldable).
+  const company = [...meta.heroes, ...meta.known].map(m => ({ ...m, _owned: true, salary: salaryOf(m) }));
+  tavernCompanyEl.innerHTML = company.map(hireCard).join('');
+
+  // For-hire pool: merge survivors (already owned, shown as such) with fresh
+  // recruits. Mark anything already owned so it can't be double-bought.
+  const pool = tavernRecruits.map(m => ({ ...m, salary: salaryOf(m), _owned: owns(m.id) }));
+  tavernForHireEl.innerHTML = pool.map(hireCard).join('');
+  tavernCountEl.textContent = `${company.length} in your company · ${meta.wins}/${meta.runs} runs won`;
+  btnTavernLeave.disabled = company.length === 0;
+}
+
+function showTavern(message) {
+  if (message) tavernSubEl.textContent = message;
+  renderTavern();
+  tavernOverlayEl.classList.remove('hidden');
+  mapOverlayEl.classList.add('hidden');
+  restOverlayEl.classList.add('hidden');
+}
+
+tavernCompanyEl.addEventListener('click', (e) => {
+  const btn = e.target.closest('.th-buy');
+  if (!btn || btn.dataset.buy === undefined) return;
+  const id = btn.dataset.buy;
+  const m = [...getMeta().heroes, ...getMeta().known].find(x => x.id === id);
+  if (!m) return;
+  const meta = getMeta();
+  if (meta.heroes.some(h => h.id === id) || meta.known.some(k => k.id === id)) return; // already owned
+  const salary = salaryOf(m);
+  if (meta.gold < salary) return;
+  addGold(-salary);
+  meta.known.push(m); // rehire a survivor
+  renderTavern();
+});
+
+tavernForHireEl.addEventListener('click', (e) => {
+  const btn = e.target.closest('.th-buy');
+  if (!btn || btn.dataset.buy === undefined) return;
+  const id = btn.dataset.buy;
+  const m = tavernRecruits.find(x => x.id === id);
+  if (!m) return;
+  const meta = getMeta();
+  const salary = salaryOf(m);
+  if (meta.gold < salary) return;
+  addGold(-salary);
+  meta.heroes.push(m); // buy the hire outright, owned from now on
+  tavernRecruits = tavernRecruits.filter(x => x.id !== id);
+  tavernRecruits.push(rollTavernRecruits(1)[0]); // a new face shows up
+  renderTavern();
+});
+
+btnTavernReset.addEventListener('click', () => {
+  resetMeta();
+  tavernRecruits = rollTavernRecruits(6);
+  showTavern('Save wiped. A fresh purse and a clean slate.');
+});
+
+btnTavernLeave.addEventListener('click', () => {
+  const meta = getMeta();
+  // The company you own becomes the party for this run.
+  const party = [...meta.heroes, ...meta.known].map(m => {
+    const clone = { ...m, stats: { ...m.stats } };
+    if (clone.stats) clone.stats.currentHp = clone.stats.hp; // fresh run, full health
+    return clone;
+  });
+  if (party.length === 0) return;
+  sim.members = party;
+  sim.reset();
+  buildCustomizer();
+  buildTeamUi();
+  tavernOverlayEl.classList.add('hidden');
+  statusEl.textContent = 'Level 1 — press Space to start';
+  statusEl.className = 'status';
+});
+
 rosterGridEl.addEventListener('click', (e) => {
   const card = e.target.closest('.roster-card');
   if (!card) return;
@@ -476,9 +596,8 @@ btnRosterDone.addEventListener('click', () => {
   rosterOverlayEl.classList.add('hidden');
 });
 
-// Show the roster on first load (before any run has started).
-rosterOverlayEl.classList.remove('hidden');
-renderRoster();
+// Show the tavern on first load (before any run has started).
+showTavern('Welcome back. Hire a company and start a run.');
 
 const dt = 1 / CONFIG.sim.hz;
 let accumulator = 0;
@@ -503,15 +622,35 @@ function frame(now) {
   updateMap();
   updateDebug();
   updateRest();
+  updateGoldHud();
+  updateRunOver();
   requestAnimationFrame(frame);
+}
+
+// Run gold in the HUD (the meta gold shows in the tavern).
+function updateGoldHud() {
+  goldHudEl.textContent = '🪙 ' + sim.gold;
+}
+
+// When a run ends, automatically open the tavern for the next cycle.
+let runOverHandled = false;
+function updateRunOver() {
+  if (sim.over && !runOverHandled) {
+    runOverHandled = true;
+    showTavern(sim.over === 'win'
+      ? 'Victory! The survivors have returned and are ready to be hired again.'
+      : 'The company fell. Return with what you earned.');
+  } else if (!sim.over) {
+    runOverHandled = false;
+  }
 }
 
 function updateHud() {
   if (sim.over === 'win') {
-    statusEl.textContent = 'Victory! Team reached the exit.';
+    statusEl.textContent = 'Victory! The boss is slain. Return to the tavern.';
     statusEl.className = 'status win';
   } else if (sim.over === 'lose') {
-    statusEl.textContent = 'Defeat! The team was wiped out.';
+    statusEl.textContent = 'Defeat! The company was wiped out. Return to the tavern.';
     statusEl.className = 'status lose';
   } else if (sim.mapOpen) {
     statusEl.textContent = 'Choose your next room';
@@ -538,6 +677,8 @@ function updateTeamUi() {
       el.hpfill.style.width = '0%';
       el.stamfill.style.width = '0%';
       el.stamfill.classList.remove('sprinting');
+      el.status.textContent = 'dead';
+      el.conf.style.background = '#f87171';
       continue;
     }
     if (!u) {
@@ -545,24 +686,45 @@ function updateTeamUi() {
       el.hpfill.style.width = '100%';
       el.stamfill.style.width = '100%';
       el.stamfill.classList.remove('sprinting');
+      el.status.textContent = 'waiting';
+      el.conf.style.background = '#888';
       continue;
     }
     el.root.classList.toggle('dead', !u.alive);
     el.hpfill.style.width = Math.round((u.hp / u.maxHp) * 100) + '%';
     el.stamfill.style.width = Math.round((u.stamina / CONFIG.stamina.max) * 100) + '%';
     el.stamfill.classList.toggle('sprinting', !!u.sprinting);
+
+    // Confidence dot: green = bold, amber = nervous, red = shaken.
+    const c = u.confidence;
+    el.conf.style.background = c > 0.6 ? '#4ade80' : c > 0.4 ? '#fbbf24' : '#f87171';
+    el.conf.style.color = el.conf.style.background;
+
+    // Status line: what they're doing, and who they're doing it to.
+    let status = u.intent || '—';
+    if (u.target && u.target.alive) {
+      const tname = u.target.def.name || 'target';
+      status += ` <span class="st-target">→ ${tname}</span>`;
+    }
+    el.status.innerHTML = status;
   }
 }
 
 btnStart.addEventListener('click', () => {
-  // If the roster is still open, route through it instead of starting raw.
-  if (!rosterOverlayEl.classList.contains('hidden')) {
-    btnRosterDone.click();
+  // If the tavern is still open, route through it.
+  if (!tavernOverlayEl.classList.contains('hidden')) {
+    btnTavernLeave.click();
+    return;
+  }
+  if (sim.over) {
+    // A run just ended; return to the tavern to start the next cycle.
+    showTavern('The run is over. Spend your earnings or head out again.');
     return;
   }
   sim.start();
 });
-btnRestart.addEventListener('click', () => sim.reset());
+btnRestartRoom.addEventListener('click', () => sim.restartRoom());
+btnRestartRun.addEventListener('click', () => sim.reset());
 
 // --- Debug panel ---
 
@@ -1006,6 +1168,21 @@ function updateRest() {
 }
 
 function renderRest() {
+  restGoldEl.textContent = '🪙 ' + sim.gold;
+  btnRestHeal.disabled = sim.gold < sim.restHealCost || !sim.playerUnits.some(u => u.alive && u.hp < u.maxHp);
+  btnRestUpgrade.disabled = sim.gold < sim.restUpgradeCost || sim.playerUnits.filter(u => u.alive).length === 0;
+
+  // Upgrade member chooser.
+  const living = sim.playerUnits.filter(u => u.alive);
+  restUpgradeMembersEl.innerHTML = living.map(u => `
+    <div class="rest-upgrade-chip" data-uid="${u.id}">
+      <div class="ru-icon">${iconSvg(u.def)}</div>
+      <span>${u.def.name}</span>
+      <span class="ru-salary">ATK ${u.def.attack.atk} → ${Math.round(u.def.attack.atk * CONFIG.economy.upgradeAtkMult)}</span>
+    </div>`).join('') || '<span class="rest-sub">No living members to upgrade.</span>';
+  restUpgradeRowEl.classList.toggle('hidden', living.length === 0);
+
+  // Hire candidates.
   restCandidatesEl.innerHTML = '';
   for (const c of sim.restCandidates) {
     const el = document.createElement('div');
@@ -1015,14 +1192,33 @@ function renderRest() {
       <div class="rc-name">${c.name}</div>
       <div class="rc-stats">HP ${c.stats.hp} · Arm ${c.stats.armor} · Spd ${c.stats.speed.toFixed(1)}</div>
       <div class="rc-attack">${c.attack.type} · ${c.attack.shape} · ${c.movement}</div>
+      <div class="rc-cost" style="color:#fbbf24;font-weight:600;margin-top:auto;">Hire — 🪙 ${c.salary}</div>
     `;
     el.addEventListener('click', () => {
       sim.recruitMember(c.id);
-      el.classList.add('recruited');
+      renderRest(); // refresh gold + affordability
     });
     restCandidatesEl.appendChild(el);
   }
 }
+
+btnRestHeal.addEventListener('click', () => {
+  sim.restHealAll();
+  renderRest();
+  buildTeamUi();
+});
+
+btnRestUpgrade.addEventListener('click', () => {
+  restUpgradeRowEl.classList.toggle('hidden');
+});
+
+restUpgradeMembersEl.addEventListener('click', (e) => {
+  const chip = e.target.closest('.rest-upgrade-chip');
+  if (!chip) return;
+  sim.restUpgrade(parseInt(chip.dataset.uid, 10));
+  renderRest();
+  buildTeamUi();
+});
 
 document.getElementById('btn-finish-rest').addEventListener('click', () => {
   sim.finishRest();
@@ -1033,13 +1229,17 @@ document.getElementById('btn-finish-rest').addEventListener('click', () => {
 window.addEventListener('keydown', (e) => {
   if (e.code === 'Space') {
     e.preventDefault();
-    if (!rosterOverlayEl.classList.contains('hidden')) {
-      btnRosterDone.click();
+    if (!tavernOverlayEl.classList.contains('hidden')) {
+      btnTavernLeave.click();
+      return;
+    }
+    if (sim.over) {
+      btnStart.click();
       return;
     }
     sim.start();
   } else if (e.code === 'KeyR') {
-    sim.reset();
+    btnRestartRoom.click();
   } else if (e.code === 'KeyD') {
     setDebug(!renderer.showDebug);
   } else if (e.code === 'KeyP') {

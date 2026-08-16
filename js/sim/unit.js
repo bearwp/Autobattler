@@ -25,8 +25,9 @@ export class Unit {
 
     // Stats come from def.stats (members) or def directly (bat).
     const stats = def.stats || def;
-    this.hp = stats.hp;
     this.maxHp = stats.hp;
+    // Start at persisted HP when a member carries damage between rooms.
+    this.hp = Math.min(typeof stats.currentHp === 'number' ? stats.currentHp : stats.hp, stats.hp);
     this.armor = stats.armor ?? 0;
     this.speed = stats.speed;
     this.size = stats.size ?? 0.5;
