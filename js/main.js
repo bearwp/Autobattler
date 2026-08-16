@@ -1,6 +1,6 @@
 // Entry point. Wires sim + render together with a fixed-timestep loop.
 
-import { CONFIG, ATTACK_TYPES, TARGET_RULES, ATTACK_SHAPES, MOVEMENTS, SHAPES, MODIFIERS, SELF_PRESERVATION } from './sim/config.js';
+import { CONFIG, ATTACK_TYPES, TARGET_RULES, ATTACK_SHAPES, SHAPES, MODIFIERS, SELF_PRESERVATION } from './sim/config.js';
 import { Sim } from './sim/sim.js';
 import { Renderer } from './render/renderer.js';
 import { getMeta, addGold, spendGold, salaryOf, startingHero, rollTavernRecruits, completeRun, resetMeta } from './meta.js';
@@ -23,6 +23,8 @@ const mapOverlayEl = document.getElementById('map-overlay');
 const mapSvgEl = document.getElementById('map-svg');
 const restOverlayEl = document.getElementById('rest-overlay');
 const restCandidatesEl = document.getElementById('rest-candidates');
+const shopOverlayEl = document.getElementById('shop-overlay');
+const eventOverlayEl = document.getElementById('event-overlay');
 const rosterOverlayEl = document.getElementById('roster-overlay');
 const rosterGridEl = document.getElementById('roster-grid');
 const rosterCountEl = document.getElementById('roster-count');
@@ -81,7 +83,6 @@ const SHAPE_LABELS = {
   rangeOneShot: 'Range one-shot', rangeAoe: 'Range AOE', meleeOneShot: 'Melee one-shot',
   meleeCone: 'Melee cone', meleeAoe: 'Melee AOE',
 };
-const MOVE_LABELS = { keepDistance: 'Keep distance', kite: 'Kite', evade: 'Evade', follow: 'Follow', advance: 'Advance', flank: 'Flank', charge: 'Charge', guard: 'Guard', hunt: 'Hunt' };
 const RULE_LABELS = { lowestHp: 'Lowest HP', highestHp: 'Highest HP', closest: 'Closest', strongest: 'Strongest', weakest: 'Weakest', mostAtOnce: 'Most at once', threatened: 'Threatened' };
 const PERSONALITIES = ['stoic', 'cocky', 'cautious', 'cheerful', 'grumpy', 'nervous', 'chatty'];
 
@@ -105,7 +106,7 @@ function memberCard(m) {
   const s = m.stats;
   const a = m.attack;
   const mods = m.modifiers || [];
-  const summary = `${ATK_TYPE_LABELS[a.type]} · ${SHAPE_LABELS[a.shape]} · ${MOVE_LABELS[m.movement]}`;
+  const summary = `${ATK_TYPE_LABELS[a.type]} · ${SHAPE_LABELS[a.shape]}`;
   return `
     <div class="mcard" data-id="${m.id}">
       <div class="mhead">
@@ -139,9 +140,8 @@ function memberCard(m) {
           <select class="mtrule">${optionList('trule', TARGET_RULES, ['Lowest HP', 'Highest HP', 'Closest', 'Strongest', 'Weakest', 'Most at once', 'Threatened'], m.target.rule)}</select>
         </div>
 
-        <div class="chip move" title="Movement">
-          <span class="chip-emoji">🏃</span>
-          <select class="mmove">${optionList('move', MOVEMENTS, ['Keep distance', 'Kite', 'Evade', 'Follow', 'Advance', 'Flank', 'Charge', 'Guard', 'Hunt'], m.movement)}</select>
+        <div class="chip move" title="Personality">
+          <span class="chip-emoji">🧠</span>
           <select class="mpersonality" title="Personality">${optionList('personality', PERSONALITIES, ['Stoic', 'Cocky', 'Cautious', 'Cheerful', 'Grumpy', 'Nervous'], m.personality)}</select>
           <label class="leader-toggle"><input class="mleaderchk" type="checkbox" ${m.leader ? 'checked' : ''} /> Leader</label>
         </div>
@@ -163,9 +163,8 @@ function memberCard(m) {
 function updateCardSummary(card) {
   const type = card.querySelector('.matktype').value;
   const shape = card.querySelector('.matkshape').value;
-  const move = card.querySelector('.mmove').value;
   card.querySelector('.msummary').textContent =
-    `${ATK_TYPE_LABELS[type]} · ${SHAPE_LABELS[shape]} · ${MOVE_LABELS[move]}`;
+    `${ATK_TYPE_LABELS[type]} · ${SHAPE_LABELS[shape]}`;
 }
 
 function buildCustomizer() {
@@ -203,7 +202,6 @@ function readMembers() {
       modifiers: Array.from(card.querySelectorAll('.mod-chips .chip.mod')).map(c => c.dataset.mod),
       selfPreservation: Array.from(card.querySelectorAll('.mod-chips .chip.sp')).map(c => c.dataset.sp),
       target: { side: str('.mtside'), rule: str('.mtrule') },
-      movement: str('.mmove'),
       leader: card.querySelector('.mleaderchk').checked,
       personality: str('.mpersonality') || 'stoic',
     });
@@ -229,7 +227,6 @@ function addMember() {
     modifiers: [],
     selfPreservation: [],
     target: { side: 'enemy', rule: 'closest' },
-    movement: 'advance',
     leader: false,
     personality: 'stoic',
   };
@@ -362,9 +359,9 @@ document.addEventListener('click', (e) => {
   }
 });
 
-// Live-update the card summary line when attack/movement selections change.
+// Live-update the card summary line when attack selections change.
 customizerEl.addEventListener('change', (e) => {
-  if (e.target.matches('.matktype, .matkshape, .mmove')) {
+  if (e.target.matches('.matktype, .matkshape')) {
     const card = e.target.closest('.mcard');
     if (card) updateCardSummary(card);
   }
@@ -407,10 +404,11 @@ function buildTeamUi() {
       <div class="icon">${iconSvg(m)}</div>
       <div class="info">
         <div class="name"><span class="conf" title="Confidence"></span>${m.name}</div>
-        <div class="ability">${m.attack.type} · ${m.attack.shape} · ${m.movement}</div>
+        <div class="ability">${m.attack.type} · ${m.attack.shape}</div>
         <div class="status"></div>
-        <div class="hpbar"><div class="hpfill"></div></div>
-        <div class="stambar"><div class="stamfill"></div></div>
+        <div class="bar"><span class="barlabel">HP</span><div class="hpbar"><div class="hpfill"></div></div></div>
+        <div class="bar"><span class="barlabel">ST</span><div class="stambar"><div class="stamfill"></div></div></div>
+        <div class="confrow"><span class="barlabel">CF</span><div class="confbar"><div class="conffill"></div></div><span class="conflabel"></span></div>
       </div>
     `;
     teamUiEl.appendChild(root);
@@ -420,6 +418,8 @@ function buildTeamUi() {
       stamfill: root.querySelector('.stamfill'),
       status: root.querySelector('.status'),
       conf: root.querySelector('.conf'),
+      conffill: root.querySelector('.conffill'),
+      conflabel: root.querySelector('.conflabel'),
     });
   }
 }
@@ -447,7 +447,7 @@ function rosterCard(c) {
       </div>
       <div class="rc-blurb">${c.blurb}</div>
       <div class="rc-stats">HP ${s.hp} · Arm ${s.armor} · Spd ${s.speed.toFixed(1)}</div>
-      <div class="rc-attack">${ATK_TYPE_LABELS[a.type]} · ${SHAPE_LABELS[a.shape]} · ${MOVE_LABELS[c.movement]}</div>
+      <div class="rc-attack">${ATK_TYPE_LABELS[a.type]} · ${SHAPE_LABELS[a.shape]}</div>
       <div class="rc-pick">${selected ? 'Selected' : 'Add to party'}</div>
     </div>`;
 }
@@ -487,7 +487,7 @@ function hireCard(m) {
         <span class="th-name">${m.name}</span>
       </div>
       <div class="th-stats">HP ${m.stats.hp} · Arm ${m.stats.armor} · Spd ${m.stats.speed.toFixed(1)}</div>
-      <div class="th-attack">${ATK_TYPE_LABELS[m.attack.type]} · ${SHAPE_LABELS[m.attack.shape]} · ${MOVE_LABELS[m.movement]}</div>
+      <div class="th-attack">${ATK_TYPE_LABELS[m.attack.type]} · ${SHAPE_LABELS[m.attack.shape]}</div>
       ${m._owned ? '<div class="th-buy">Owned</div>'
         : `<button class="th-buy" data-buy="${m.id}">Hire — 🪙 ${salary}</button>`}
     </div>`;
@@ -516,6 +516,8 @@ function showTavern(message) {
   tavernOverlayEl.classList.remove('hidden');
   mapOverlayEl.classList.add('hidden');
   restOverlayEl.classList.add('hidden');
+  shopOverlayEl.classList.add('hidden');
+  eventOverlayEl.classList.add('hidden');
 }
 
 tavernCompanyEl.addEventListener('click', (e) => {
@@ -622,6 +624,8 @@ function frame(now) {
   updateMap();
   updateDebug();
   updateRest();
+  updateShop();
+  updateEvent();
   updateGoldHud();
   updateRunOver();
   requestAnimationFrame(frame);
@@ -679,6 +683,9 @@ function updateTeamUi() {
       el.stamfill.classList.remove('sprinting');
       el.status.textContent = 'dead';
       el.conf.style.background = '#f87171';
+      el.conffill.style.width = '0%';
+      el.conffill.style.background = '#f87171';
+      el.conflabel.textContent = '—';
       continue;
     }
     if (!u) {
@@ -688,6 +695,9 @@ function updateTeamUi() {
       el.stamfill.classList.remove('sprinting');
       el.status.textContent = 'waiting';
       el.conf.style.background = '#888';
+      el.conffill.style.width = '0%';
+      el.conffill.style.background = '#888';
+      el.conflabel.textContent = '—';
       continue;
     }
     el.root.classList.toggle('dead', !u.alive);
@@ -699,6 +709,10 @@ function updateTeamUi() {
     const c = u.confidence;
     el.conf.style.background = c > 0.6 ? '#4ade80' : c > 0.4 ? '#fbbf24' : '#f87171';
     el.conf.style.color = el.conf.style.background;
+    // Confidence bar: a readable fill + percentage label.
+    el.conffill.style.width = Math.round(c * 100) + '%';
+    el.conffill.style.background = c > 0.6 ? '#4ade80' : c > 0.4 ? '#fbbf24' : '#f87171';
+    el.conflabel.textContent = Math.round(c * 100) + '%';
 
     // Status line: what they're doing, and who they're doing it to.
     let status = u.intent || '—';
@@ -903,16 +917,10 @@ function unitCard(u) {
     if (u.safetyDir && (u.safetyDir.x !== 0 || u.safetyDir.y !== 0)) {
       moraleHtml += `<div class="dbg-row"><b>Safety</b><span class="dbg-goal">(${u.safetyDir.x.toFixed(2)}, ${u.safetyDir.y.toFixed(2)})</span></div>`;
     }
-    // Intel avoid decision, if this member made one this frame.
-    if (u.avoid) {
-      const a = u.avoid;
-      const action = a.action === 'retreat' ? 'Retreat' : 'Hold';
-      const flags = [
-        a.engaged ? 'engaged' : null,
-        a.outnumbered ? 'outnumbered' : null,
-        a.canEscape ? 'can-escape' : 'can\'t-escape',
-      ].filter(Boolean).join(' ');
-      moraleHtml += `<div class="dbg-row"><b>Avoid</b><span class="dbg-intent">${action} · danger ${a.danger.toFixed(0)} · ${flags} · ${a.reason}</span></div>`;
+    // Commitment: how hard this member is pushing toward its goal (0..1).
+    if (u.commitment !== undefined) {
+      const c = Math.round(u.commitment * 100);
+      moraleHtml += `<div class="dbg-row"><b>Commit</b><span class="dbg-intent">${c}%</span></div>`;
     }
   }
 
@@ -1070,10 +1078,12 @@ function renderDebugIntel() {
 const NODE_COLORS = {
   start: '#64748b', combat: '#f87171', elite: '#fb923c',
   rest: '#4ade80', treasure: '#fbbf24', boss: '#f43f5e',
+  shop: '#38bdf8', event: '#a78bfa',
 };
 const NODE_LABELS = {
   start: 'Start', combat: 'Fight', elite: 'Elite',
   rest: 'Rest', treasure: 'Treasure', boss: 'Boss',
+  shop: 'Shop', event: 'Event',
 };
 
 let mapRendered = false;
@@ -1108,8 +1118,8 @@ function renderMap() {
   const height = maxRows * rowH + pad;
 
   mapSvgEl.setAttribute('viewBox', `0 0 ${width} ${height}`);
-  mapSvgEl.setAttribute('width', width);
-  mapSvgEl.setAttribute('height', height);
+  mapSvgEl.removeAttribute('width');
+  mapSvgEl.removeAttribute('height');
 
   const pos = {};
   for (const n of nodes) {
@@ -1191,7 +1201,7 @@ function renderRest() {
     el.innerHTML = `
       <div class="rc-name">${c.name}</div>
       <div class="rc-stats">HP ${c.stats.hp} · Arm ${c.stats.armor} · Spd ${c.stats.speed.toFixed(1)}</div>
-      <div class="rc-attack">${c.attack.type} · ${c.attack.shape} · ${c.movement}</div>
+      <div class="rc-attack">${c.attack.type} · ${c.attack.shape}</div>
       <div class="rc-cost" style="color:#fbbf24;font-weight:600;margin-top:auto;">Hire — 🪙 ${c.salary}</div>
     `;
     el.addEventListener('click', () => {
@@ -1223,6 +1233,104 @@ restUpgradeMembersEl.addEventListener('click', (e) => {
 document.getElementById('btn-finish-rest').addEventListener('click', () => {
   sim.finishRest();
   restRendered = false;
+  buildTeamUi();
+});
+
+// --- Shop overlay ---
+
+const shopGoldEl = document.getElementById('shop-gold');
+const shopStockEl = document.getElementById('shop-stock');
+let shopRendered = false;
+
+function updateShop() {
+  if (!sim.shopOpen) {
+    if (!shopOverlayEl.classList.contains('hidden')) {
+      shopOverlayEl.classList.add('hidden');
+      shopRendered = false;
+    }
+    return;
+  }
+  shopOverlayEl.classList.remove('hidden');
+  if (!shopRendered) {
+    renderShop();
+    shopRendered = true;
+  }
+}
+
+function renderShop() {
+  shopGoldEl.textContent = '🪙 ' + sim.gold;
+  shopStockEl.innerHTML = '';
+  for (const c of sim.shopStock) {
+    const el = document.createElement('div');
+    el.className = 'rest-candidate';
+    el.dataset.id = c.id;
+    el.innerHTML = `
+      <div class="rc-name">${c.name}</div>
+      <div class="rc-stats">HP ${c.stats.hp} · Arm ${c.stats.armor} · Spd ${c.stats.speed.toFixed(1)}</div>
+      <div class="rc-attack">${c.attack.type} · ${c.attack.shape}</div>
+      <div class="rc-cost" style="color:#fbbf24;font-weight:600;margin-top:auto;">Hire — 🪙 ${c.salary}</div>
+    `;
+    el.addEventListener('click', () => {
+      sim.shopBuy(c.id);
+      renderShop();
+      buildTeamUi();
+    });
+    shopStockEl.appendChild(el);
+  }
+}
+
+document.getElementById('btn-finish-shop').addEventListener('click', () => {
+  sim.finishShop();
+  shopRendered = false;
+  buildTeamUi();
+});
+
+// --- Event overlay ---
+
+const eventTextEl = document.getElementById('event-text');
+const eventChoicesEl = document.getElementById('event-choices');
+let eventRendered = false;
+
+function updateEvent() {
+  if (!sim.eventOpen) {
+    if (!eventOverlayEl.classList.contains('hidden')) {
+      eventOverlayEl.classList.add('hidden');
+      eventRendered = false;
+    }
+    return;
+  }
+  eventOverlayEl.classList.remove('hidden');
+  if (!eventRendered) {
+    renderEvent();
+    eventRendered = true;
+  }
+}
+
+function renderEvent() {
+  const choices = sim.eventChoices();
+  const resolved = sim.eventState ? sim.eventState.resolved : null;
+  eventTextEl.textContent = resolved
+    ? (resolved === 'heal' ? 'A soft light washes over your party, mending every wound.' :
+       resolved === 'gamble' ? 'You give of your vitality, and coin spills into your purse.' :
+       resolved === 'hire' ? 'A grateful adventurer pledges their blade to your cause.' :
+       'The shrine grows quiet.')
+    : 'In a hidden alcove you find an old shrine, its voice a whisper. What will you offer?';
+  eventChoicesEl.innerHTML = choices.map(c => `
+    <button class="event-choice" data-id="${c.id}" ${resolved ? 'disabled' : ''}>
+      <span class="ec-label">${c.label}</span>
+      <span class="ec-effect">${c.effect}</span>
+    </button>`).join('');
+  eventChoicesEl.querySelectorAll('.event-choice').forEach(b => {
+    b.addEventListener('click', () => {
+      sim.resolveEvent(b.dataset.id);
+      renderEvent();
+    });
+  });
+}
+
+document.getElementById('btn-finish-event').addEventListener('click', () => {
+  sim.finishEvent();
+  eventRendered = false;
   buildTeamUi();
 });
 

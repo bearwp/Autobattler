@@ -103,7 +103,6 @@ export class Unit {
   // Convenience accessors for member attributes.
   get attack() { return this.def.attack; }
   get targetRule() { return this.def.target; }
-  get movement() { return this.def.movement; }
   get isLeader() { return !!this.def.leader; }
   get modifiers() { return this.def.modifiers || []; }
   get selfPreservation() { return this.def.selfPreservation || []; }

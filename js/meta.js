@@ -29,7 +29,7 @@ export function startingHero() {
 function defaultState() {
   const hero = startingHero();
   return {
-    gold: 60,          // tavern currency, carries across runs
+    gold: 150,         // tavern currency, carries across runs
     heroes: [hero],    // members you own (hero always free; survivors rehired)
     known: [],         // survivors from past runs who now appear in the tavern
     wins: 0,
@@ -45,7 +45,7 @@ function load() {
     const s = JSON.parse(raw);
     // Defensive: ensure required fields exist.
     return {
-      gold: typeof s.gold === 'number' ? s.gold : 60,
+      gold: typeof s.gold === 'number' ? s.gold : 150,
       heroes: Array.isArray(s.heroes) ? s.heroes : [],
       known: Array.isArray(s.known) ? s.known : [],
       wins: s.wins || 0,
@@ -100,7 +100,6 @@ export function rollTavernRecruits(count) {
   const shapes = ['square', 'triangle', 'circle'];
   const atkTypes = ['damage', 'damage', 'damage', 'heal', 'taunt', 'shield'];
   const atkShapes = ['rangeOneShot', 'rangeAoe', 'meleeOneShot', 'meleeCone', 'meleeAoe'];
-  const moves = ['keepDistance', 'kite', 'evade', 'follow', 'advance'];
   const rules = ['lowestHp', 'highestHp', 'closest', 'strongest', 'weakest', 'mostAtOnce', 'threatened'];
   const modPool = ['taunt', 'lifesteal', 'pierce', 'slow', 'peel', 'evasive', 'burn', 'stun', 'push'];
   const personalities = ['stoic', 'cocky', 'cautious', 'cheerful', 'grumpy', 'nervous', 'chatty'];
@@ -130,7 +129,6 @@ export function rollTavernRecruits(count) {
       modifiers: mods,
       selfPreservation: [],
       target: { side: (type === 'heal' || type === 'shield') ? 'ally' : 'enemy', rule: rules[Math.floor(Math.random() * rules.length)] },
-      movement: moves[Math.floor(Math.random() * moves.length)],
       leader: false,
       personality: personalities[Math.floor(Math.random() * personalities.length)],
       runs: 0, wins: 0,

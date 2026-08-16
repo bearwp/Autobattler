@@ -26,7 +26,12 @@ export class Sim {
     this.currentNodeId = null;
     this.mapOpen = false;     // true while the player is choosing the next room
     this.restOpen = false;    // true while the player is at a rest screen
+    this.shopOpen = false;    // true while the player is at a shop screen
+    this.eventOpen = false;   // true while the player is at an event screen
     this.restCandidates = []; // members offered at a rest point
+    this.shopStock = [];      // members offered at a shop node
+    this.eventState = null;   // { choices, resolved } for the current event
+    this._hireJustMade = null; // id of the member just recruited free from an event
     this._recruitSeq = 0;     // unique id counter for recruited members
     this.bonds = new Map();   // "idA|idB" (sorted) -> bond value, persists across rooms
     this.intel = {};          // shared team knowledge: kind -> { hitsTaken, dmgTaken }, persists across rooms
@@ -111,7 +116,9 @@ export class Sim {
     // learn, so they charge the unknown without fear. Once the team has been
     // hit, the learned value takes over for everyone.
     if (base <= 0) {
-      return u.armor >= CONFIG.intel.tankArmor ? 0 : CONFIG.intel.unknownDanger;
+      // A durable member (high HP + armor) is built to absorb and is the one
+      // who engages first to learn, so it charges the unknown without fear.
+      return u.hp + u.armor * 10 >= 200 ? 0 : CONFIG.intel.unknownDanger;
     }
     const fam = u.familiarityOf(kind);
     const ramp = CONFIG.intel.familiarityRamp;
@@ -198,10 +205,12 @@ export class Sim {
 
   _randomNodeType() {
     const r = Math.random();
-    if (r < 0.55) return 'combat';
-    if (r < 0.75) return 'elite';
-    if (r < 0.9) return 'rest';
-    return 'treasure';
+    if (r < 0.4) return 'combat';
+    if (r < 0.58) return 'elite';
+    if (r < 0.72) return 'rest';
+    if (r < 0.82) return 'treasure';
+    if (r < 0.92) return 'shop';
+    return 'event';
   }
 
   _sample(arr, n) {
@@ -218,14 +227,21 @@ export class Sim {
     this.currentNodeId = nodeId;
     this.mapOpen = false;
     const node = this.map.nodes.find(n => n.id === nodeId);
-    if (node && node.type === 'rest') {
-      // Rest nodes open a rest screen instead of a combat room.
-      this.restOpen = true;
+    if (node && (node.type === 'rest' || node.type === 'shop' || node.type === 'event')) {
+      // Rest/shop/event nodes open their own screen instead of a combat room.
+      this.restOpen = node.type === 'rest';
+      this.shopOpen = node.type === 'shop';
+      this.eventOpen = node.type === 'event';
       this.restCandidates = this._rollRecruits();
+      this.shopStock = this._rollRecruits(CONFIG.map.shopStock);
+      this.eventState = null;
       this.started = false;
       this.over = null;
       return;
     }
+    this.restOpen = false;
+    this.shopOpen = false;
+    this.eventOpen = false;
     this._startLevel(node);
   }
 
@@ -238,9 +254,11 @@ export class Sim {
     }
   }
 
-  // Generate a small pool of random members to offer at a rest point.
-  _rollRecruits() {    const pool = [];
-    for (let i = 0; i < 3; i++) {
+  // Generate a small pool of random members to offer at a rest point or shop.
+  _rollRecruits(count) {
+    const pool = [];
+    const n = count || 3;
+    for (let i = 0; i < n; i++) {
       const m = this._randomMember();
       m.salary = salaryOf(m);
       pool.push(m);
@@ -261,9 +279,7 @@ export class Sim {
     const shapes = ['square', 'triangle', 'circle'];
     const atkTypes = ['damage', 'damage', 'damage', 'heal', 'taunt', 'shield'];
     const atkShapes = ['rangeOneShot', 'rangeAoe', 'meleeOneShot', 'meleeCone', 'meleeAoe'];
-    const moves = ['keepDistance', 'kite', 'evade', 'follow', 'advance'];
-    const rules = ['lowestHp', 'highestHp', 'closest', 'strongest', 'weakest', 'mostAtOnce', 'threatened'];
-    const modPool = ['taunt', 'lifesteal', 'pierce', 'slow', 'peel', 'evasive', 'burn', 'stun', 'push'];
+    const rules = ['lowestHp', 'highestHp', 'closest', 'strongest', 'weakest', 'mostAtOnce', 'threatened'];    const modPool = ['taunt', 'lifesteal', 'pierce', 'slow', 'peel', 'evasive', 'burn', 'stun', 'push'];
     const personalities = ['stoic', 'cocky', 'cautious', 'cheerful', 'grumpy', 'nervous', 'chatty'];
 
     const type = atkTypes[Math.floor(Math.random() * atkTypes.length)];
@@ -290,7 +306,6 @@ export class Sim {
       },
       modifiers: mods,
       target: { side: (type === 'heal' || type === 'shield') ? 'ally' : 'enemy', rule: rules[Math.floor(Math.random() * rules.length)] },
-      movement: moves[Math.floor(Math.random() * moves.length)],
       leader: false,
       personality: personalities[Math.floor(Math.random() * personalities.length)],
     };
@@ -353,7 +368,6 @@ export class Sim {
     this.mapOpen = true;
     this.started = false;
   }
-
   // Nodes reachable from the current node (the player's next choices).
   _nextChoices() {
     return this.map.edges
@@ -425,8 +439,8 @@ export class Sim {
     const type = node ? node.type : 'combat';
     const m = CONFIG.map;
 
-    // Rest and treasure rooms have no enemies.
-    if (type === 'rest' || type === 'treasure') {
+    // Rest, shop, event and treasure rooms have no enemies.
+    if (type === 'rest' || type === 'shop' || type === 'event' || type === 'treasure') {
       if (type === 'treasure') this._applyTreasure();
       return;
     }
@@ -513,6 +527,87 @@ export class Sim {
     this.gold += CONFIG.economy.treasureGold;
   }
 
+  // Shop room: recruit a member from the shop stock, exactly like a rest hire.
+  shopBuy(candidateId) {
+    const c = this.shopStock.find(x => x.id === candidateId);
+    if (!c) return;
+    if (c.salary > this.gold) return; // can't afford this hire
+    this.gold -= c.salary;
+    this.members.push(c);
+    this.shopStock = this.shopStock.filter(x => x.id !== candidateId);
+  }
+
+  // Event room: one of a few small narrative boons. Each outcome is a simple,
+  // immediate tradeoff the player picks. Only one choice can be taken; after
+  // choosing, the event is resolved and the map reopens.
+  eventChoices() {
+    if (this.eventState) return this.eventState.choices;
+    const alive = this.playerUnits.filter(u => u.alive);
+    const choices = [];
+    // Option 1: heal the team (costs gold).
+    if (alive.some(u => u.hp < u.maxHp)) {
+      choices.push({ id: 'heal', label: 'Pray to an old shrine', effect: 'Heal the whole team to full' });
+    }
+    // Option 2: gamble max HP for gold.
+    if (alive.length > 0) {
+      choices.push({ id: 'gamble', label: 'Offer your vitality', effect: 'Lose some max HP for 🪙 gold' });
+    }
+    // Option 3: free recruit.
+    choices.push({ id: 'hire', label: 'Invite a wandering adventurer', effect: 'A new ally joins for free' });
+    this.eventState = { choices, resolved: null };
+    return choices;
+  }
+
+  // Resolve a chosen event outcome.
+  resolveEvent(choiceId) {
+    const choices = this.eventChoices();
+    const choice = choices.find(c => c.id === choiceId);
+    if (!choice || this.eventState.resolved) return;
+    this.eventState.resolved = choiceId;
+    const m = CONFIG.map;
+    if (choiceId === 'heal') {
+      for (const u of this.playerUnits) {
+        if (!u.alive) continue;
+        u.hp = u.maxHp;
+        if (u.def.stats) u.def.stats.currentHp = u.maxHp;
+      }
+    } else if (choiceId === 'gamble') {
+      const gold = m.eventGoldRisk;
+      this.gold += gold;
+      // Sacrifice a fraction of each living member's max HP (and current HP).
+      for (const u of this.playerUnits) {
+        if (!u.alive) continue;
+        const cut = Math.max(1, Math.round(u.maxHp * m.eventGoldRiskHp));
+        u.maxHp = Math.max(1, u.maxHp - cut);
+        u.hp = Math.max(1, Math.min(u.hp, u.maxHp));
+        if (u.def.stats) {
+          u.def.stats.hp = u.maxHp;
+          u.def.stats.currentHp = u.hp;
+        }
+      }
+    } else if (choiceId === 'hire') {
+      const recruits = this._rollRecruits(1);
+      const r = recruits[0];
+      r.salary = 0;
+      this.members.push(r);
+      this._hireJustMade = r.id;
+    }
+  }
+
+  // Leave the event screen and open the map to choose the next node.
+  finishEvent() {
+    this.eventOpen = false;
+    this.mapOpen = true;
+    this.started = false;
+  }
+
+  // Leave the shop screen and open the map to choose the next node.
+  finishShop() {
+    this.shopOpen = false;
+    this.mapOpen = true;
+    this.started = false;
+  }
+
   start() {
     if (this.over) this._reset();
     if (this.mapOpen) return; // wait for the player to pick a node
@@ -527,10 +622,10 @@ export class Sim {
   // HP from the start of this room. Only meaningful mid-fight (not on the map
   // or at rest, and not after the run ends).
   restartRoom() {
-    if (this.over || this.mapOpen || this.restOpen) return;
+    if (this.over || this.mapOpen || this.restOpen || this.shopOpen || this.eventOpen) return;
     if (!this.currentNodeId) return;
     const node = this.map.nodes.find(n => n.id === this.currentNodeId);
-    if (!node || node.type === 'rest' || node.type === 'start') return;
+    if (!node || node.type === 'rest' || node.type === 'shop' || node.type === 'event' || node.type === 'start') return;
     // Restore the members' HP to where they were when this room started, so
     // the replay begins from the same situation (attrition from earlier rooms
     // is preserved, but this room's damage is undone).
@@ -858,12 +953,12 @@ export class Sim {
     if (!choices.some(c => c.id === nodeId)) return;
     this.level += 1;
     this._enterNode(nodeId);
-    // Rest nodes pause the sim (their screen is shown instead); only combat
-    // rooms start running. Setting started=true here would let _checkEnd run
-    // during rest and re-trigger the room-clear with the stale empty enemy
-    // list, opening the map behind the rest overlay.
+    // Rest/shop/event nodes pause the sim (their screen is shown instead);
+    // only combat rooms start running. Setting started=true here would let
+    // _checkEnd run during rest and re-trigger the room-clear with the stale
+    // empty enemy list, opening the map behind the rest overlay.
     const node = this.map.nodes.find(n => n.id === nodeId);
-    if (!node || node.type !== 'rest') this.started = true;
+    if (!node || (node.type !== 'rest' && node.type !== 'shop' && node.type !== 'event')) this.started = true;
   }
 
   // --- Member AI (generic, driven by the member's attribute bundle) ---
@@ -1032,16 +1127,13 @@ export class Sim {
     // Peel: units with the peel modifier rush to defend squishy allies.
     this._peelForAllies(u, enemies, allies, dt);
 
-    // Evasive: units with the evasive modifier back away from their hunter.
-    this._evasiveRetreat(u, enemies, dt);
-
     // Self-preservation: situational overrides (hide / seek heal) that take
     // priority over the normal movement decided above.
     this._selfPreservation(u, enemies, allies, dt);
 
     // Confidence-driven safety: a shaken member retreats toward the healer,
     // tank, and away from threats instead of fighting.
-    this._seekSafety(u, enemies, allies, dt);
+    this._seekSafety(u, target, enemies, allies, dt);
 
     // Resolve attacks (primary + universal secondary).
     this._resolveAttacks(u, target, enemies, allies);
@@ -1078,7 +1170,10 @@ export class Sim {
     for (const a of allies) {
       if (a === u || !a.alive) continue;
       if (dist(u.pos, a.pos) > cf.backupRadius) continue;
-      if (a.armor >= CONFIG.intel.tankArmor) { backup += cf.backupTank; backupParts.push(`${a.displayName}(tank)`); }
+      // A durable ally (high HP + armor) steadies the member like a front
+      // line; a healer steadies it too. This replaces the old `tankArmor`
+      // role threshold with a real durability quantity.
+      if (a.hp + a.armor * 10 >= 200) { backup += cf.backupTank; backupParts.push(`${a.displayName}(front)`); }
       else if (a.attack && a.attack.type === 'heal') { backup += cf.backupHealer; backupParts.push(`${a.displayName}(healer)`); }
       else { backup += cf.backupAlly; backupParts.push(`${a.displayName}(ally)`); }
     }
@@ -1154,12 +1249,17 @@ export class Sim {
   _focusFireTarget(u, target, enemies, allies) {
     const it = CONFIG.intel;
     const ec = CONFIG.intel; // emergent coordination weights live under intel
-    const isTank = u.armor >= it.tankArmor;
-    // Is any tank (other than me) currently engaging a given enemy? A tank
-    // "engaging" means it has that enemy as its target. Used to make DPS
-    // commit when a tank is in front, and to let a tanky member step up
-    // (off-tank) when no tank is engaging.
-    const tankEngaging = (e) => allies.some(a => a !== u && a.alive && a.armor >= it.tankArmor &&
+    // Durability: effective hit points (HP + armor scaled). A durable member
+    // is a front-liner that can absorb hits, so it steps up to engage; a
+    // fragile one hangs back. This replaces the old hard-coded `tankArmor`
+    // role threshold with a real quantity.
+    const durable = (a) => a.hp + a.armor * 10 >= 200;
+    const isDurable = durable(u);
+    // Is any durable ally (other than me) currently engaging a given enemy?
+    // "Engaging" means it has that enemy as its target. Used to make fragile
+    // members commit when a front-liner is in front, and to let a durable
+    // member step up (off-tank) when no front-liner is engaging.
+    const tankEngaging = (e) => allies.some(a => a !== u && a.alive && durable(a) &&
       a.target && a.target.alive && a.target === e);
     const anyTankEngaging = enemies.some(tankEngaging);
 
@@ -1184,12 +1284,13 @@ export class Sim {
       }
       score += alliesOn * ec.allyFocusWeight;
 
-      // Commit when a tank is engaging: DPS is braver behind a tank.
+      // Commit when a durable front-liner is engaging: fragile members are
+      // braver behind a front line.
       if (tankEngaging(e)) score += ec.tankEngageWeight;
 
-      // Off-tank: if I'm tanky and no tank is engaging anything, step up and
-      // take the strongest threat so the team always has a front line.
-      if (isTank && !anyTankEngaging) score += ec.offTankWeight;
+      // Off-tank: if I'm durable and no front-liner is engaging anything,
+      // step up and take the strongest threat so the team always has a front.
+      if (isDurable && !anyTankEngaging) score += ec.offTankWeight;
 
       // Intel: pounce on what I've personally softened, avoid what the team
       // knows hits hard (ramped by my own familiarity) unless it is already
@@ -1231,7 +1332,7 @@ export class Sim {
         allyFocus: alliesOn * ec.allyFocusWeight,
         bond,
         tankEngaging: tankEngaging(e) ? ec.tankEngageWeight : 0,
-        offTank: (isTank && !anyTankEngaging) ? ec.offTankWeight : 0,
+        offTank: (isDurable && !anyTankEngaging) ? ec.offTankWeight : 0,
         pounce: kill * it.pounceWeight,
         danger: (danger > it.avoidDanger && !vulnerable) ? -(danger * it.dangerWeight) : 0,
         finish: (1 - e.hp / e.maxHp) * ec.finishWeight,
@@ -1275,18 +1376,6 @@ export class Sim {
     this._growBond(u, best, CONFIG.synergy.peelBond);
   }
 
-  // A unit with the 'evasive' modifier backs away from the enemy currently
-  // hunting it (highest threat), layered on top of its normal movement.
-  _evasiveRetreat(u, enemies, dt) {
-    if (!u.modifiers.includes('evasive')) return;
-    const hunter = threatenedEnemy(u, enemies);
-    if (!hunter) return;
-    if (dist(u.pos, hunter.pos) >= CONFIG.team.evadeDistance) return;
-    const dir = this._safetyDirection(u, enemies, allies);
-    this._intent(u, 'evading hunter');
-    this._setVel(u, scale(norm(dir), u.effSpeed), dt);
-  }
-
   // Self-preservation instincts. These override the normal movement decided in
   // _applyMovement. Priority: seek healing (most urgent) > hide behind a
   // protector. Each only fires while its trigger holds, with hysteresis so the
@@ -1312,6 +1401,7 @@ export class Sim {
           this._intent(u, 'seeking healer');
           this._moveAlongPath(u, healer.pos, dt);
           this._separate(u, allies, dt);
+          this._resolveAttacks(u, target, enemies, allies);
           return;
         }
       } else {
@@ -1330,6 +1420,7 @@ export class Sim {
           this._intent(u, 'hiding behind ally');
           this._moveAlongPath(u, spot, dt);
           this._separate(u, allies, dt);
+          this._resolveAttacks(u, target, enemies, allies);
           return;
         }
       }
@@ -1343,7 +1434,7 @@ export class Sim {
   // attribute as the avoid decision, so a beaten-down member naturally
   // retreats to safety while a confident one keeps fighting. Runs after the
   // urgent self-preservation instincts (seek heal / hide) so those win.
-  _seekSafety(u, enemies, allies, dt) {
+  _seekSafety(u, target, enemies, allies, dt) {
     const cf = CONFIG.confidence;
     // A shaken member gives up sooner, a confident one keeps fighting. The
     // per-member difference now comes purely from the dynamic confidence
@@ -1357,12 +1448,36 @@ export class Sim {
     }
     u.seekingSafety = true;
 
+    // Confidence steadies over time while fleeing, so a shaken unit
+    // gradually regains its nerve instead of cowering forever.
+    u.confidence = clamp(u.confidence + cf.safetyRecover * dt, cf.min, cf.max);
+
+    // If an enemy is in attack range, attack it — but keep fleeing, don't
+    // move toward it. _resolveAttacks fires the attack; the retreat below
+    // keeps the unit backing off.
+    const threat = nearestEnemy(u, enemies);
+    const inRange = threat && dist(u.pos, threat.pos) <= u.attack.range;
+
+    // Reached safety: near the team cluster and no enemy close. Reward the
+    // successful retreat with a confidence boost so the member steadies and
+    // rejoins the fight instead of cowering forever.
+    const cluster = this._teamCluster(u, allies);
+    const nearTeam = cluster && dist(u.pos, cluster) <= cf.safetyGainRadius;
+    const noThreat = !threat || dist(u.pos, threat.pos) > cf.pressureRadius;
+    if (nearTeam && noThreat) {
+      u.confidence = clamp(u.confidence + cf.safetyGain, cf.min, cf.max);
+      this._intent(u, 'regaining composure');
+      return;
+    }
+
     const dir = this._safetyDirection(u, enemies, allies);
     if (dir.x === 0 && dir.y === 0) return;
     this._intent(u, 'seeking safety (shaken)');
     // Sprint toward safety while stamina lasts.
     this._sprint(u, norm(dir), dt);
     this._separate(u, allies, dt);
+    // Attack any enemy in reach while backing off.
+    if (inRange) this._resolveAttacks(u, target, enemies, allies);
   }
 
   // The single, reusable "where is safe?" direction. Blends several instincts
@@ -1381,16 +1496,26 @@ export class Sim {
     if (threat) {
       dir = add(dir, scale(norm(sub(u.pos, threat.pos)), s.threatWeight));
     }
+    // A unit only retreats toward a team member if that direction also moves
+    // it away from the nearest threat. Otherwise the "toward the team" pull
+    // can point straight through an enemy (team on the far side), sending a
+    // shaken unit running into danger.
+    const awayFromThreat = threat ? norm(sub(u.pos, threat.pos)) : null;
+    const towardSafe = (p) => {
+      if (!awayFromThreat) return true;
+      const to = norm(sub(p, u.pos));
+      return dot(to, awayFromThreat) > 0;
+    };
 
     // Toward the healer.
     const healer = allies.find(a => a.alive && a !== u && a.attack && a.attack.type === 'heal');
-    if (healer) {
+    if (healer && towardSafe(healer.pos)) {
       dir = add(dir, scale(norm(sub(healer.pos, u.pos)), s.healerWeight));
     }
 
     // Toward the tankiest ally.
     const tank = this._pickProtector(u, allies);
-    if (tank) {
+    if (tank && towardSafe(tank.pos)) {
       dir = add(dir, scale(norm(sub(tank.pos, u.pos)), s.tankWeight));
     }
 
@@ -1400,7 +1525,7 @@ export class Sim {
       if (a === u || !a.alive) continue;
       if (a.confidence < CONFIG.confidence.safetyThreshold) continue;
       const d = dist(u.pos, a.pos);
-      if (d > 0 && d < CONFIG.team.protectRadius) {
+      if (d > 0 && d < CONFIG.team.protectRadius && towardSafe(a.pos)) {
         dir = add(dir, scale(norm(sub(a.pos, u.pos)), s.allyWeight * (1 - d / CONFIG.team.protectRadius)));
       }
     }
@@ -1418,9 +1543,46 @@ export class Sim {
     // a corner. Reuses the same margin logic as the bats' wall avoidance.
     dir = add(dir, scale(this._boidWallAvoidance(u), s.wallWeight));
 
+    // Hard wall projection: if the unit is inside the wall margin, zero out
+    // any component of the retreat that points into a wall. This guarantees
+    // the retreat slides along the wall instead of pinning into a corner.
+    const { width, height } = CONFIG.world;
+    const margin = 1.5;
+    if (u.pos.x < margin && dir.x < 0) dir.x = 0;
+    if (u.pos.x > width - margin && dir.x > 0) dir.x = 0;
+    if (u.pos.y < margin && dir.y < 0) dir.y = 0;
+    if (u.pos.y > height - margin && dir.y > 0) dir.y = 0;
+
+    // Corner escape: if projection left no direction to flee (threat straight
+    // in line with the corner), drift along the wall so the unit slides out
+    // instead of cowering in place. Pick the wall tangent that heads toward
+    // the team cluster.
+    if (dir.x === 0 && dir.y === 0) {
+      const cluster = this._teamCluster(u, allies);
+      if (cluster) {
+        const to = sub(cluster, u.pos);
+        // Keep only the component parallel to the wall the unit is against.
+        if (u.pos.x < margin || u.pos.x > width - margin) dir.y = to.y;
+        if (u.pos.y < margin || u.pos.y > height - margin) dir.x = to.x;
+      }
+    }
+
     // Store the blended direction for the debug overlay.
     u.safetyDir = dir;
     return dir;
+  }
+
+  // The center of the team's alive members (excluding the unit itself), used
+  // as a fallback escape target so a shaken unit slides back toward its
+  // teammates instead of cowering alone in a corner.
+  _teamCluster(u, allies) {
+    let cx = 0, cy = 0, count = 0;
+    for (const a of allies) {
+      if (a === u || !a.alive) continue;
+      cx += a.pos.x; cy += a.pos.y; count++;
+    }
+    if (count === 0) return null;
+    return { x: cx / count, y: cy / count };
   }
 
   // Pick the ally to hide behind: the tankiest (highest armor, then HP),
@@ -1437,267 +1599,154 @@ export class Sim {
   }
 
   _applyMovement(u, target, enemies, allies, dt) {
-    const mv = u.movement;
+    const mv = CONFIG.movement;
 
-    // Intel-driven caution: a squishy member that has learned an enemy hits
-    // hard avoids diving in. It retreats when it can actually escape (or is
-    // being actively engaged / swarmed), and holds ground when fleeing is
-    // futile (slower than the target, or the target outranges it). Either way
-    // it doesn't charge into a fight it can't win. The decision (with its
-    // reasoning) is stored on the unit for the debug overlay.
-    const avoid = this._avoidDecision(u, target, enemies, allies);
-    u.avoid = avoid;
-    if (avoid && avoid.action === 'retreat') {
-      this._intent(u, 'backing off (dangerous enemy)');
-      this._say(u, 'avoiding', target);
+    // --- Layer 1: Universal survival ---
+    // Everyone, regardless of role, backs off the enemy currently hunting
+    // them (highest threat) when it gets too close. This is the "evade to
+    // survive" instinct that applies to every member. It does NOT decide
+    // engagement — that's the goal layer. A healer backs off its attacker
+    // while still moving toward the hurt ally.
+    const hunter = threatenedEnemy(u, enemies);
+    // Only back off if the hunter is close but NOT already in attack range.
+    // If the member can hit it, it stands and fights — otherwise a ranged
+    // unit would flee from a target it's already in range of, bouncing
+    // between evading and attacking every frame.
+    const hunterInRange = hunter && dist(u.pos, hunter.pos) <= u.attack.range;
+    if (hunter && !hunterInRange && dist(u.pos, hunter.pos) < mv.survivalDistance - mv.survivalHysteresis) {
+      this._intent(u, 'evading hunter');
+      this._say(u, 'avoiding', hunter);
       this._dropConfidence(u, CONFIG.confidence.avoidDrop);
-      // Retreat toward safety (healer, tank, confident allies, away from
-      // threats and walls) rather than toward the exit, so the team funnels
-      // behind its front line instead of scattering to the door.
       const dir = this._safetyDirection(u, enemies, allies);
-      // Sprint to escape a dangerous enemy while stamina lasts.
       this._sprint(u, norm(dir), dt);
       this._separate(u, allies, dt);
-      return;
-    }
-    if (avoid && avoid.action === 'hold') {
-      this._intent(u, 'holding ground (can\'t escape)');
-      this._say(u, 'holding', target);
-      this._dropConfidence(u, CONFIG.confidence.avoidDrop);
-      this._idleWander(u, dt);
-      this._separate(u, allies, dt);
+      // Keep fighting while backing off: if a target is in reach, attack it.
+      this._resolveAttacks(u, target, enemies, allies);
       return;
     }
 
-    // Follow: follow the leader (or advance if no leader alive).
-    if (mv === 'follow') {
-      const leader = this.playerUnits.find(a => a.alive && a.isLeader);
-      const goal = leader ? this._advanceGoal(u) : this._exitGoal();
-      if (leader) {
-        const d = dist(u.pos, goal);
-        const t = CONFIG.team;
-        // Hysteresis: stop once inside the follow distance, resume only after
-        // drifting past it by the dead-zone, so the follower doesn't jitter at
-        // the boundary. This lets it get close and hold a comfortable gap.
-        if (d <= t.followDistance) {
-          if (!u.following) u.following = true;
-          if (u.following && d >= t.followDistance - t.followHysteresis) {
-            this._intent(u, 'following leader');
-            this._idleWander(u, dt);
-            return;
-          }
-        } else {
-          u.following = false;
-        }
-        this._intent(u, 'following leader');
-        this._moveAlongPath(u, goal, dt);
-        this._separate(u, allies, dt);
-        return;
-      }
-      this._intent(u, 'advancing into combat');
-      this._moveAlongPath(u, goal, dt);
-      this._separate(u, allies, dt);
-      return;
-    }
+    // --- Layer 2: Kit-derived goal ---
+    // What does this member's kit want it to do right now? The attack type
+    // drives the goal, so it can never drift out of sync with the build.
+    const goal = this._kitGoal(u, target, enemies, allies);
 
-    // Kite: keep enemies at arm's length. Back away if one gets too close,
-    // otherwise close in to attack range, and advance to the exit when clear.
-    if (mv === 'kite') {
-      const near = nearestEnemy(u, enemies);
-      if (!near) {
-        // No enemies: trail the leader instead of racing to the exit.
-        this._intent(u, 'advancing (no enemies)');
-        this._moveAlongPath(u, this._advanceGoal(u), dt);
-        this._separate(u, allies, dt);
-        return;
-      }
-      const dNear = dist(u.pos, near.pos);
-      if (dNear < CONFIG.team.kiteDistance - CONFIG.team.kiteHysteresis) {
-        // Back away toward safety (healer, tank, confident allies, away from
-        // threats and walls) so the unit doesn't get pinned against a wall.
-        this._intent(u, 'kiting away');
-        const dir = this._safetyDirection(u, enemies, allies);
-        this._setVel(u, scale(norm(dir), u.effSpeed), dt);
-        u.kiteTimer = 0.3;
-        return;
-      }
-      if (dNear > u.attack.range) {
-        // Too far to shoot: close in on the nearest enemy.
-        this._intent(u, 'closing to range');
-        this._moveAlongPath(u, near.pos, dt);
-        this._separate(u, allies, dt);
-        return;
-      }
-      // In range: hold and shoot.
-      this._intent(u, 'shooting');
-      u.vel = { x: 0, y: 0 };
-      return;
-    }
+    // --- Layer 3: Emergent commitment ---
+    // How hard does this member push toward its goal? Confidence and
+    // durability, not class labels, decide. A fragile, shaken member hangs
+    // back; a durable, confident one commits.
+    const commit = this._commitment(u, enemies, allies);
 
-    // KeepDistance: hold a comfortable distance from enemies.
-    if (mv === 'keepDistance') {
-      const near = nearestEnemy(u, enemies);
-      if (near && dist(u.pos, near.pos) < CONFIG.team.keepDistance - CONFIG.team.keepHysteresis) {
-        this._intent(u, 'backing off');
-        const away = norm(sub(u.pos, near.pos));
-        this._setVel(u, scale(away, u.effSpeed), dt);
-        return;
-      }
-      this._intent(u, 'holding distance');
-      const goal = enemies.length === 0 ? this._advanceGoal(u) : { x: CONFIG.doors.entrance.x + 2, y: CONFIG.doors.entrance.y };
-      this._moveAlongPath(u, goal, dt);
-      this._separate(u, allies, dt);
-      return;
-    }
-
-    // Evade: like kite, but reacts to the enemy actually hunting this unit
-    // (highest threat) rather than the nearest one. Back away from the hunter,
-    // biased toward the exit, and advance when no one is targeting it.
-    if (mv === 'evade') {
-      const hunter = threatenedEnemy(u, enemies);
-      if (!hunter) {
-        this._intent(u, 'advancing (no hunter)');
-        this._moveAlongPath(u, this._advanceGoal(u), dt);
-        this._separate(u, allies, dt);
-        return;
-      }
-      const dH = dist(u.pos, hunter.pos);
-      if (dH < CONFIG.team.evadeDistance - CONFIG.team.evadeHysteresis) {
-        this._intent(u, 'evading hunter');
-        const dir = this._safetyDirection(u, enemies, allies);
-        this._setVel(u, scale(norm(dir), u.effSpeed), dt);
-        return;
-      }
-      if (dH > u.attack.range) {
-        this._intent(u, 'closing on hunter');
-        this._moveAlongPath(u, hunter.pos, dt);
-        this._separate(u, allies, dt);
-        return;
-      }
-      this._intent(u, 'shooting hunter');
-      u.vel = { x: 0, y: 0 };
-      return;
-    }
-
-    // Flank: circle around the target to attack from the side, avoiding its
-    // front arc. Moves to a point offset perpendicular to the line to the
-    // target, then closes in once positioned.
-    if (mv === 'flank') {
-      if (!target) {
-        this._intent(u, 'advancing (no target)');
-        this._moveAlongPath(u, this._advanceGoal(u), dt);
-        this._separate(u, allies, dt);
-        return;
-      }
-      const toT = sub(target.pos, u.pos);
-      const dT = len(toT);
-      // Perpendicular direction (rotate the unit->target vector 90 degrees).
-      const perp = { x: -toT.y, y: toT.x };
-      const perpN = norm(perp);
-      const side = add(target.pos, scale(perpN, CONFIG.team.flankDistance));
-      if (dT > u.attack.range + 0.5) {
-        // Still far: head for the flanking point.
-        this._intent(u, 'flanking target');
-        this._moveAlongPath(u, side, dt);
-        this._separate(u, allies, dt);
-        return;
-      }
-      // In range: hold and attack.
-      this._intent(u, 'attacking from flank');
-      u.vel = { x: 0, y: 0 };
-      return;
-    }
-
-    // Charge: build up speed toward the target and ram it for bonus damage.
-    // The closing burst is a stamina-powered sprint, so the same pool that
-    // fuels defensive escapes also fuels the offensive pursuit.
-    if (mv === 'charge') {
-      if (target && dist(u.pos, target.pos) > u.attack.range) {
-        if (!u.chargeReady) this._say(u, 'charging', target);
-        u.chargeReady = true;
-        this._intent(u, 'charging target');
-        this._moveAlongPath(u, target.pos, dt);
-        this._separate(u, allies, dt);
-        // Charge burst: sprint toward the target, spending stamina for the
-        // speed boost. Stops at the reserve floor like any other sprint.
-        const dir = norm(sub(target.pos, u.pos));
-        this._sprint(u, dir, dt);
-        return;
-      }
-      if (!target) {
-        u.chargeReady = false;
-        this._intent(u, 'advancing (no target)');
-        this._moveAlongPath(u, this._advanceGoal(u), dt);
-        this._separate(u, allies, dt);
-        return;
-      }
-      this._intent(u, 'attacking');
-      u.vel = { x: 0, y: 0 };
-      return;
-    }
-
-    // Guard: stay near a designated ally and engage anything that threatens
-    // them. Guards the leader, or the most hurt ally if no leader is alive.
-    if (mv === 'guard') {
-      const leader = this.playerUnits.find(a => a.alive && a.isLeader);
-      const guarded = leader || lowestHpAlly(u, allies) || u;
-      const threat = nearestEnemy(guarded, enemies);
-      if (threat && dist(guarded.pos, threat.pos) <= CONFIG.team.guardEngageRange) {
-        // An enemy is menacing the guarded ally: intercept it.
-        this._intent(u, 'intercepting threat to ally');
-        this._moveAlongPath(u, threat.pos, dt);
-        this._separate(u, allies, dt);
-        return;
-      }
-      // No immediate threat: hold position near the guarded ally.
-      if (guarded !== u && dist(u.pos, guarded.pos) > CONFIG.team.guardDistance) {
-        this._intent(u, 'guarding ally');
-        this._moveAlongPath(u, guarded.pos, dt);
-        this._separate(u, allies, dt);
-        return;
-      }
-      this._intent(u, 'guarding');
-      u.vel = { x: 0, y: 0 };
-      return;
-    }
-
-    // Hunt: relentlessly chase the nearest enemy, ignoring the exit. Only
-    // advances toward the exit when no enemies remain.
-    if (mv === 'hunt') {
-      const prey = nearestEnemy(u, enemies);
-      if (prey) {
-        this._intent(u, 'hunting prey');
-        // Sprint to catch a fleeing target, else close at normal speed.
-        if (!this._pursue(u, prey, dt)) {
-          this._moveAlongPath(u, prey.pos, dt);
-        }
-        this._separate(u, allies, dt);
-        return;
-      }
-      this._intent(u, 'advancing (no prey)');
-      this._moveAlongPath(u, this._advanceGoal(u), dt);
-      this._separate(u, allies, dt);
-      return;
-    }
-
-    // Advance (default): move toward target, else toward exit.
-    if (target && dist(u.pos, target.pos) > u.attack.range) {
-      this._intent(u, 'advancing on target');
-      // Sprint to catch a fleeing target, else close at normal speed.
-      if (!this._pursue(u, target, dt)) {
-        this._moveAlongPath(u, target.pos, dt);
-      }
-      this._separate(u, allies, dt);
-      return;
-    }
-    if (!target) {
+    if (!goal) {
+      // No goal (e.g. no enemies and no hurt ally): advance or idle.
       this._intent(u, 'advancing into combat');
       this._moveAlongPath(u, this._advanceGoal(u), dt);
       this._separate(u, allies, dt);
       return;
     }
-    this._intent(u, 'attacking');
-    u.vel = { x: 0, y: 0 };
+
+    // Low commitment: hold at range from the goal instead of pushing in.
+    if (commit < mv.commitFloor) {
+      const d = dist(u.pos, goal.pos);
+      if (d < mv.holdRange) {
+        this._intent(u, 'holding at range (cautious)');
+        this._idleWander(u, dt);
+        this._separate(u, allies, dt);
+        return;
+      }
+      this._intent(u, 'approaching cautiously');
+      this._moveAlongPath(u, goal.pos, dt);
+      this._separate(u, allies, dt);
+      return;
+    }
+
+    // In range of the goal: hold and act.
+    if (dist(u.pos, goal.pos) <= mv.goalRange) {
+      this._intent(u, goal.intent);
+      u.vel = { x: 0, y: 0 };
+      return;
+    }
+
+    // High commitment: sprint to close on the goal.
+    this._intent(u, goal.intent);
+    if (commit >= mv.sprintCommit) {
+      const dir = norm(sub(goal.pos, u.pos));
+      this._sprint(u, dir, dt);
+    } else {
+      this._moveAlongPath(u, goal.pos, dt);
+    }
+    this._separate(u, allies, dt);
+  }
+
+  // The kit-derived goal: what this member wants to do right now, based on
+  // its attack type. Returns { pos, intent } or null. This replaces the old
+  // hard-coded `movement` role ladder — the build drives the behavior.
+  _kitGoal(u, target, enemies, allies) {
+    const type = u.attack.type;
+    const range = u.attack.range;
+
+    // Support goals: position near the ally to heal/shield/buff.
+    if (type === 'heal' || type === 'shield' || type === 'buff' || type === 'mana') {
+      const ally = target && target.alive ? target : this._healTarget(u, allies);
+      if (ally) {
+        // Stand just inside attack range of the ally so the cast lands.
+        const to = sub(ally.pos, u.pos);
+        const d = len(to);
+        const desired = Math.max(0, d - range * 0.5);
+        const dir = d > 0 ? scale(to, 1 / d) : { x: 0, y: 0 };
+        const label = type === 'heal' ? 'moving to heal' : type === 'shield' ? 'moving to shield' : 'moving to support';
+        return { pos: add(u.pos, scale(dir, desired)), intent: label };
+      }
+      return null;
+    }
+
+    // Taunt goal: be near the most enemies so the taunt lands on a crowd.
+    if (type === 'taunt') {
+      if (enemies.length === 0) return null;
+      let cx = 0, cy = 0;
+      for (const e of enemies) { cx += e.pos.x; cy += e.pos.y; }
+      const centroid = { x: cx / enemies.length, y: cy / enemies.length };
+      return { pos: centroid, intent: 'moving to taunt' };
+    }
+
+    // Damage goal: engage the focus target.
+    if (target && target.alive) {
+      return { pos: target.pos, intent: 'advancing on target' };
+    }
+
+    return null;
+  }
+
+  // Emergent commitment: how hard this member pushes toward its goal, 0..1.
+  // Confidence and durability, not class labels, decide. A durable member
+  // (high HP + armor) commits harder; a shaken one hangs back. Nearby backup
+  // steadies the member, so it commits when the team is around.
+  _commitment(u, enemies, allies) {
+    const mv = CONFIG.movement;
+    const cf = CONFIG.confidence;
+
+    // Durability: effective hit points (HP + armor scaled) relative to a
+    // baseline. A tanky member is built to absorb, so it commits harder.
+    const dur = u.hp + u.armor * 10;
+    const durFrac = clamp(dur / 200, 0, 1);
+
+    // Backup: nearby allies steady the member (reuse the confidence backup).
+    let backup = 0;
+    for (const a of allies) {
+      if (a === u || !a.alive) continue;
+      if (dist(u.pos, a.pos) > cf.backupRadius) continue;
+      backup += cf.backupAlly;
+    }
+    const backupFrac = clamp(backup / 2, 0, 1);
+
+    const commit = clamp(
+      u.confidence * mv.confWeight +
+      durFrac * mv.durWeight +
+      backupFrac * mv.backupWeight,
+      0, 1
+    );
+    // Store for the debug panel.
+    u.commitment = commit;
+    return commit;
   }
 
   // Lower a member's confidence (clamped to the floor). Called when the
@@ -1713,82 +1762,6 @@ export class Sim {
   _gainConfidence(u, amount) {
     const cf = CONFIG.confidence;
     u.confidence = clamp(u.confidence + amount, cf.min, cf.max);
-  }
-
-  // Intel-driven caution: decide how a squishy member reacts to a dangerous
-  // target. Returns null (fight normally) or { action, danger, outnumbered,
-  // engaged, canEscape, reason }. Considers the target's learned danger, its
-  // HP, the member's own killability, whether a tank is absorbing, how
-  // outnumbered the member is, whether it is being actively engaged, and
-  // whether it can actually outrun or outrange the target. Healers never
-  // avoid (it's their job to stay back). Tanks tolerate far more danger
-  // before avoiding, but will still retreat if truly threatened.
-  _avoidDecision(u, target, enemies, allies) {
-    if (!target || !target.alive) return null;
-    const it = CONFIG.intel;
-    // Healers and shielders don't avoid.
-    if (u.attack.type === 'heal' || u.attack.type === 'shield') return null;
-    // Only cautious when hurt.
-    if (u.hp / u.maxHp < it.avoidHpFrac) return null;
-    // Must have learned this kind hits hard (shared knowledge, ramped by
-    // personal familiarity). A ranged enemy's reach inflates its danger since
-    // it can hit from beyond the member's own range.
-    let danger = this.memberDanger(u, target.def.kind);
-    const outranged = target.def.range > u.attack.range;
-    if (outranged) danger *= it.rangeThreat;
-    // Tanks are built to absorb hits, so they need a much higher danger bar
-    // before they'll back off.
-    const isTank = u.armor >= it.tankArmor;
-    if (isTank) danger *= it.tankDangerMult;
-    // Confidence alone scales the danger threshold: a confident member is
-    // braver (tolerates more danger), a shaken one is more cautious. This
-    // makes the team's nerve an emergent, self-balancing quantity. The old
-    // separate aggression multiplier was folded into the starting confidence.
-    const cf = CONFIG.confidence;
-    // Backup damps the danger threshold: a nearby tank, healer, or ally makes
-    // the member braver, so it commits when the team is around and backs off
-    // when isolated. This is the "rely on each other" mechanic.
-    let backup = 0;
-    for (const a of allies) {
-      if (a === u || !a.alive) continue;
-      if (dist(u.pos, a.pos) > cf.backupRadius) continue;
-      if (a.armor >= it.tankArmor) backup += cf.backupTank;
-      else if (a.attack && a.attack.type === 'heal') backup += cf.backupHealer;
-      else backup += cf.backupAlly;
-    }
-    const threshold = it.avoidDanger * (0.5 + u.confidence * cf.avoidMult) + backup;
-    if (danger <= threshold) return null;
-    // Don't avoid if the target is already vulnerable (pounce instead).
-    if (target.hp / target.maxHp < it.avoidHpFrac) return null;
-    // If the member can actually finish the enemy, commit instead of fleeing.
-    if (u.killabilityOf(target) >= it.pounceKillFrac) return null;
-    // A tank absorbing the hits means it's safe to stay and fight.
-    const tankEngaging = allies.some(a => a.alive && a !== u && a.armor >= it.tankArmor &&
-      a.target && a.target.alive && a.target === target);
-    if (tankEngaging) return null;
-
-    // Outnumbered: too many enemies nearby to safely engage.
-    let nearby = 0;
-    for (const e of enemies) {
-      if (e === target) continue;
-      if (dist(u.pos, e.pos) <= it.swarmRadius) nearby++;
-    }
-    const outnumbered = nearby >= it.swarmCount;
-
-    // Actively engaged: an enemy is currently targeting this member.
-    const engaged = enemies.some(e => e.target === u);
-
-    // Can the member actually escape? It must be faster than the target, and
-    // the target must not outrange it (a ranged enemy can hit it while it
-    // flees, so running is pointless).
-    const canEscape = u.effSpeed > target.effSpeed * it.speedEscape && !outranged;
-
-    // Retreat when it can escape and is in real danger (engaged or swarmed).
-    // Otherwise hold ground rather than die running.
-    if (canEscape && (engaged || outnumbered)) {
-      return { action: 'retreat', danger, outnumbered, engaged, canEscape, reason: 'engaged/swarmed, can escape' };
-    }
-    return { action: 'hold', danger, outnumbered, engaged, canEscape, reason: 'can\'t escape' };
   }
 
   // Where a member heads when there's nothing to fight. The leader leads
@@ -2590,28 +2563,16 @@ export class Sim {
     const floor = st.max * st.reserveFrac;
     if (u.stamina <= floor) {
       u.sprinting = false;
+      // Out of sprint stamina: still move at normal speed in the given
+      // direction. Without this, a retreating unit keeps its previous
+      // velocity (e.g. toward an enemy) and drifts into danger.
+      this._setVel(u, scale(dir, u.effSpeed), dt);
       return u.effSpeed;
     }
     u.sprinting = true;
     u.stamina = Math.max(floor, u.stamina - st.sprintCost * dt);
     this._setVel(u, scale(dir, u.effSpeed * st.sprintMult), dt);
     return u.effSpeed * st.sprintMult;
-  }
-
-  // Sprint to close on a target that is retreating (moving away from this
-  // unit). Returns true if it sprinted. This lets a member burn stamina to
-  // catch a fleeing enemy instead of letting it escape.
-  _pursue(u, target, dt) {
-    if (!target || !target.alive) return false;
-    const toT = sub(target.pos, u.pos);
-    const d = len(toT);
-    if (d <= u.attack.range) return false;
-    // Only sprint if the target is actually moving away from us.
-    const away = dot(target.vel, norm(toT));
-    if (away <= 0) return false;
-    this._intent(u, 'pursuing retreating target');
-    this._sprint(u, norm(toT), dt);
-    return true;
   }
 
   // Apply a knockback impulse to a unit, pushing it away from `from`.

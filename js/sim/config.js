@@ -15,8 +15,6 @@ export const ATTACK_SHAPES = [
   'rangeOneShot', 'rangeAoe', 'meleeOneShot', 'meleeCone', 'meleeAoe',
 ];
 
-export const MOVEMENTS = ['keepDistance', 'kite', 'evade', 'follow', 'advance', 'flank', 'charge', 'guard', 'hunt'];
-
 export const SHAPES = ['square', 'triangle', 'circle'];
 
 // Modifiers are composable extras attached to a member's primary attack.
@@ -324,29 +322,29 @@ export const CONFIG = {
   // (see sim._updateEnemy). `count` is the base swarm size for combat rooms.
   enemies: {
     bat: {
-      kind: 'bat', hp: 40, atk: 22, range: 0.8, speed: 4.8, armor: 0,
+      kind: 'bat', hp: 36, atk: 20, range: 0.8, speed: 4.8, armor: 0,
       color: '#a855f7', shape: 'triangle', size: 0.4,
-      count: 9, countPerLevel: 4,
+      count: 8, countPerLevel: 3,
     },
     brute: {
-      kind: 'brute', hp: 130, atk: 38, range: 1.0, speed: 2.4, armor: 6,
+      kind: 'brute', hp: 120, atk: 34, range: 1.0, speed: 2.4, armor: 5,
       color: '#f97316', shape: 'square', size: 0.7,
       count: 4, countPerLevel: 1,
     },
     spitter: {
-      kind: 'spitter', hp: 34, atk: 18, range: 6.0, speed: 3.4, armor: 0,
+      kind: 'spitter', hp: 30, atk: 12, range: 6.0, speed: 3.4, armor: 0,
       color: '#22d3ee', shape: 'circle', size: 0.4,
-      count: 5, countPerLevel: 2,
+      count: 4, countPerLevel: 1,
     },
     wisp: {
-      kind: 'wisp', hp: 20, atk: 13, range: 0.8, speed: 6.4, armor: 0,
+      kind: 'wisp', hp: 18, atk: 12, range: 0.8, speed: 6.4, armor: 0,
       color: '#e879f9', shape: 'triangle', size: 0.3,
-      count: 7, countPerLevel: 3,
+      count: 6, countPerLevel: 2,
     },
   },
 
   // Weighted chance each enemy type is chosen for a combat room.
-  enemyWeights: { bat: 0.4, brute: 0.2, spitter: 0.2, wisp: 0.2 },
+  enemyWeights: { bat: 0.35, brute: 0.25, spitter: 0.2, wisp: 0.2 },
 
   // Summoned minion (Necromancer). A small, disposable ally that rushes the
   // nearest enemy and splits aggro so the real team stays safe.
@@ -362,40 +360,44 @@ export const CONFIG = {
   // Map (Slay the Spire style): a branching node graph the player navigates
   // between rooms. Each node is a room with a type that changes its content.
   map: {
-    floors: 6,              // number of columns (start + middle + boss)
+    floors: 7,              // number of columns (start + middle + boss)
     minPerFloor: 3,         // min nodes per middle floor
-    maxPerFloor: 5,         // max nodes per middle floor
-    eliteHpMult: 1.7,       // elite bats have more HP
-    eliteAtkMult: 1.4,      // elite bats hit harder
-    bossHp: 500,            // boss bat HP
-    bossAtk: 38,            // boss bat attack
-    bossEscortCount: 8,     // number of escort enemies around the boss
-    levelHpMult: 0.22,      // +HP% per level past 1 (compounding)
-    levelAtkMult: 0.18,     // +ATK% per level past 1 (compounding)
+    maxPerFloor: 6,         // max nodes per middle floor
+    eliteHpMult: 1.5,       // elite bats have more HP
+    eliteAtkMult: 1.25,      // elite bats hit harder
+    bossHp: 420,            // boss bat HP
+    bossAtk: 32,            // boss bat attack
+    bossEscortCount: 6,     // number of escort enemies around the boss
+    levelHpMult: 0.16,      // +HP% per level past 1 (compounding)
+    levelAtkMult: 0.13,     // +ATK% per level past 1 (compounding)
     treasureHpBonus: 10,    // (legacy) permanent max-HP bonus from a treasure room
+    shopStock: 3,           // recruits offered at a shop node
+    eventHealPct: 0.6,      // event: heal up to this fraction of missing HP
+    eventGoldRisk: 40,      // event: gold gained for a HP gamble
+    eventGoldRiskHp: 0.15,  // event: max-HP fraction paid as the gamble's cost
   },
 
   // Run economy: gold earned by clearing rooms and spent at rest points (heal,
   // upgrade, or hire). Run gold is banked back into the tavern on completion.
   economy: {
-    goldPerClear: 30,        // gold earned for clearing a room
-    treasureGold: 60,        // gold earned from a treasure room
-    healCost: 20,            // rest: heal the whole team to full
-    upgradeCost: 25,         // rest: boost one member's attack + max HP
-    upgradeAtkMult: 1.25,    // attack multiplier from one upgrade
-    upgradeHpMult: 1.15,     // max-HP multiplier from one upgrade
+    goldPerClear: 25,        // gold earned for clearing a room
+    treasureGold: 75,        // gold earned from a treasure room
+    healCost: 15,            // rest: heal the whole team to full
+    upgradeCost: 20,         // rest: boost one member's attack + max HP
+    upgradeAtkMult: 1.3,    // attack multiplier from one upgrade
+    upgradeHpMult: 1.2,     // max-HP multiplier from one upgrade
   },
 
   // Boids parameters (bats)
   boids: {
     separationRadius: 1.0,
-    separationWeight: 2.2,
+    separationWeight: 1.6,
     cohesionRadius: 2.5,
-    cohesionWeight: 1.0,
-    alignmentWeight: 0.6,
-    seekWeight: 0.7,
+    cohesionWeight: 1.2,
+    alignmentWeight: 1.2,
+    seekWeight: 3.0,
     tauntSeekWeight: 1.6,   // taunted bats charge their taunter, ignoring scatter
-    wallWeight: 2.0,
+    wallWeight: 1.5,
     arrivalRadius: 1.5,     // bats ease off within this distance of their target
     targetStickiness: 1.5,  // score bonus to a bat's current target (desync)
     maxForce: 12,
@@ -482,6 +484,34 @@ export const CONFIG = {
     scatterWeight: 2.5,       // strength of the scatter push
   },
 
+  // Unified movement model. Replaces the old hard-coded `movement` role
+  // ladder with three emergent layers that fall out of attributes instead of
+  // class labels:
+  //   1. Survival (universal): everyone backs off the enemy hunting them.
+  //   2. Goal (kit-derived): the attack type decides what to do (heal/shield/
+  //      buff -> ally, taunt -> enemies, damage -> focus target).
+  //   3. Commitment (emergent): confidence and durability decide how hard a
+  //      member pushes toward its goal. A fragile, shaken member hangs back;
+  //      a durable, confident one commits.
+  movement: {
+    // Survival layer: how close a hunter must be before the member backs off.
+    survivalDistance: 3.0,   // hunter within this triggers a retreat
+    survivalHysteresis: 0.5, // dead-zone so survival doesn't oscillate
+    // Goal layer: how close to the goal the member wants to be.
+    goalRange: 0.5,          // stop easing within this of the goal point
+    // Commitment layer: how confidence and durability map to aggression.
+    // commitment = clamp(conf * confWeight + dur * durWeight + backup, 0..1)
+    confWeight: 1.0,         // how strongly confidence drives commitment
+    durWeight: 0.6,          // how strongly durability drives commitment
+    backupWeight: 0.4,       // how strongly nearby backup steadies commitment
+    // A member below this commitment holds at range instead of pushing in.
+    commitFloor: 0.35,        // below this, the member keeps distance from the goal
+    // How far a low-commitment member keeps from the goal.
+    holdRange: 2.5,          // distance a cautious member holds from its goal
+    // Sprint to close on the goal when commitment is high.
+    sprintCommit: 0.7,       // commitment above which the member sprints to engage
+  },
+
   // Intel: per-member learned knowledge about enemy kinds. Members only fear
   // what they have personally experienced, so a fresh recruit dives in and
   // learns the hard way. `danger` is the average damage a kind has dealt to
@@ -541,6 +571,9 @@ export const CONFIG = {
     avoidMult: 1.0,         // how strongly confidence scales the danger threshold
     safetyThreshold: 0.3,   // confidence below which a member seeks safety instead of fighting
     safetyHysteresis: 0.1,  // dead-zone so seek-safety doesn't oscillate at the threshold
+    safetyGain: 0.15,       // confidence gained when a shaken member reaches safety (near the team, no threat)
+    safetyGainRadius: 2.0, // how close to the team cluster counts as "reached safety"
+    safetyRecover: 0.08,    // confidence gained per second while fleeing (steadies over time)
     pressureRadius: 3.0,    // enemies within this sap confidence (close pressure)
     pressurePerSec: 0.05,   // confidence lost per second per nearby enemy
     pressureTargetMult: 2.0, // enemies actively targeting the member sap this much more
@@ -553,12 +586,12 @@ export const CONFIG = {
     backupHealer: 0.8,      // fear damped by a nearby healer
     backupAlly: 0.4,        // fear damped by a nearby ally
     safety: {               // how a shaken member picks its safety direction
-      threatWeight: 2.5,    // pull away from the nearest threat
-      healerWeight: 1.5,   // pull toward the healer
-      tankWeight: 1.2,     // pull toward the tankiest ally
-      spaceWeight: 1.0,    // pull away from nearby enemies (spacing)
-      allyWeight: 0.8,     // pull toward high-confidence allies (strength in numbers)
-      wallWeight: 1.5,     // pull away from walls so retreats don't pin into corners
+      threatWeight: 1.0,    // pull away from the nearest threat (secondary)
+      healerWeight: 2.0,   // pull toward the healer
+      tankWeight: 1.8,     // pull toward the tankiest ally
+      spaceWeight: 0.8,    // pull away from nearby enemies (spacing)
+      allyWeight: 1.5,     // pull toward high-confidence allies (strength in numbers)
+      wallWeight: 2.0,     // pull away from walls so retreats don't pin into corners
     },
   },
 

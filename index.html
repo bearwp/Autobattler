@@ -72,15 +72,28 @@
       min-height: 12px;
     }
     .member .status .st-target { color: #fbbf24; }
+    .member .bar { display: flex; align-items: center; gap: 4px; }
+    .member .barlabel {
+      font-size: 8px; line-height: 1; color: #64748b; flex: 0 0 auto;
+      width: 14px; text-align: right;
+    }
     .member .hpbar {
-      width: 100%; height: 5px; background: #000; border-radius: 3px; overflow: hidden;
+      flex: 1; height: 5px; background: #000; border-radius: 3px; overflow: hidden;
     }
     .member .hpfill { height: 100%; background: #4ade80; transition: width 0.1s; }
     .member .stambar {
-      width: 100%; height: 4px; background: #000; border-radius: 3px; overflow: hidden;
+      flex: 1; height: 4px; background: #000; border-radius: 3px; overflow: hidden;
     }
     .member .stamfill { height: 100%; background: #a78bfa; transition: width 0.1s; }
     .member .stamfill.sprinting { background: #fbbf24; }
+    .member .confrow { display: flex; align-items: center; gap: 4px; }
+    .member .confbar {
+      flex: 1; height: 4px; background: #000; border-radius: 3px; overflow: hidden;
+    }
+    .member .conffill { height: 100%; background: #4ade80; transition: width 0.1s; }
+    .member .conflabel {
+      font-size: 8px; line-height: 1; color: #94a3b8; margin-left: 4px;
+    }
 
     /* Customizer */
     #customizer {
@@ -244,11 +257,11 @@
     #map-overlay.hidden { display: none; }
     .map-panel {
       background: #1e1e26; border: 1px solid #3a3a45; border-radius: 12px;
-      padding: 20px 24px; max-width: 90vw; max-height: 90vh;
+      padding: 20px 24px; width: min(92vw, 1100px); height: min(88vh, 720px);
       display: flex; flex-direction: column; gap: 12px;
     }
     .map-panel h3 { margin: 0; color: #e0e0e0; font-size: 16px; }
-    #map-svg { display: block; }
+    #map-svg { display: block; flex: 1 1 auto; min-height: 0; width: 100%; height: 100%; }
     .map-node { cursor: pointer; }
     .map-node circle { stroke: #3a3a45; stroke-width: 2; }
     .map-node text { fill: #e0e0e0; font-size: 11px; text-anchor: middle; }
@@ -258,6 +271,41 @@
     .map-node.done circle { opacity: 0.5; }
     .map-edge { stroke: #3a3a45; stroke-width: 2; }
     .map-edge.available { stroke: #fbbf24; }
+
+    /* Shop / event overlays */
+    #shop-overlay, #event-overlay {
+      position: fixed; inset: 0; z-index: 210;
+      background: rgba(0, 0, 0, 0.8);
+      display: flex; align-items: center; justify-content: center;
+    }
+    #shop-overlay.hidden, #event-overlay.hidden { display: none; }
+    .shop-panel, .event-panel {
+      background: #1e1e26; border: 1px solid #3a3a45; border-radius: 12px;
+      padding: 20px 24px; width: min(92vw, 720px); max-height: 88vh;
+      display: flex; flex-direction: column; gap: 12px; overflow-y: auto;
+    }
+    .shop-panel h3, .event-panel h3 { margin: 0; color: #e0e0e0; font-size: 16px; }
+    .shop-panel button.primary, .event-panel button.primary {
+      background: #1d4ed8; color: #fff; border: 1px solid #2563eb;
+      border-radius: 6px; padding: 8px 16px; cursor: pointer; font-size: 13px;
+      align-self: flex-start;
+    }
+    .shop-panel button.primary:hover, .event-panel button.primary:hover { background: #2563eb; }
+    #shop-stock {
+      display: flex; gap: 12px; flex-wrap: wrap;
+    }
+    #shop-stock .rest-candidate { flex: 1 1 180px; max-width: 220px; }
+    #event-text { color: #cbd5e1; font-size: 14px; }
+    #event-choices { display: flex; flex-direction: column; gap: 8px; }
+    .event-choice {
+      display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+      background: #16161d; color: #e0e0e0; border: 1px solid #3a3a45; border-radius: 8px;
+      padding: 10px 14px; cursor: pointer; text-align: left;
+    }
+    .event-choice:hover:not(:disabled) { border-color: #38bdf8; background: #1d2a3a; }
+    .event-choice:disabled { opacity: 0.45; cursor: default; }
+    .event-choice .ec-label { font-weight: 600; font-size: 13px; }
+    .event-choice .ec-effect { color: #94a3b8; font-size: 12px; }
 
     /* Roster / character selection overlay */
     #roster-overlay {
@@ -579,6 +627,22 @@
         <p class="rest-sub">A new ally offers to join your team (hires cost their salary):</p>
         <div id="rest-candidates"></div>
         <button id="btn-finish-rest" class="primary">Continue</button>
+      </div>
+    </div>
+    <div id="shop-overlay" class="hidden">
+      <div class="shop-panel">
+        <h3>The Merchant</h3>
+        <p class="rest-sub">A traveling merchant keeps a few hires on hand. You have <b class="gold-inline" id="shop-gold">🪙 0</b>.</p>
+        <div id="shop-stock"></div>
+        <button id="btn-finish-shop" class="primary">Continue</button>
+      </div>
+    </div>
+    <div id="event-overlay" class="hidden">
+      <div class="event-panel">
+        <h3>Event</h3>
+        <p id="event-text"></p>
+        <div id="event-choices"></div>
+        <button id="btn-finish-event" class="primary">Continue</button>
       </div>
     </div>
     <div id="tavern-overlay" class="hidden">
