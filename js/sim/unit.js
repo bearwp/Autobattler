@@ -13,6 +13,8 @@ export class Unit {
     this.team = opts.team;          // 'player' | 'enemy'
     this.isBat = opts.team === 'enemy';
     this.personality = def.personality || 'stoic'; // drives flavor of banter lines
+    // Aggression is kept on the def as a starting-confidence bias only; the
+    // live behavior is driven by the single dynamic `confidence` value below.
     this.aggression = def.aggression ?? 0.5; // 0..1 per-member caution: 0 = retreat, 1 = aggressive
     this.pos = { ...opts.pos };
     this.vel = { x: 0, y: 0 };
@@ -63,6 +65,16 @@ export class Unit {
     this.taunted = false;
     this.kiteTimer = 0;
     this.slowTimer = 0;
+    this.stunTimer = 0;       // seconds of immobilization (stun modifier)
+    this.burn = null;         // { dps, life } damage-over-time from the burn modifier
+    this.shield = 0;          // temporary barrier absorbing damage (shield attack type)
+    this.shieldMax = 0;       // peak shield value, for the visual bar
+    this.buffTimer = 0;       // seconds of bonus damage remaining (buff attack type)
+    this.buffMult = 0;        // damage multiplier while buffed (e.g. 0.5 = +50%)
+    this.thorns = 0;          // fraction of melee damage reflected back (thorns modifier)
+    this.summonTimer = 0;     // cooldown before the next summon (summon attack type)
+    this.minionLife = 0;      // seconds before a summoned minion crumbles
+    this.minionOwner = null;  // the member that summoned this minion (for cleanup)
     this.chargeReady = false;
     this.avoid = null;        // last intel avoid decision: { action, danger, outnumbered, engaged, canEscape, reason } or null
     this.speakCooldown = 0;   // per-unit throttle for dialogue lines
@@ -74,7 +86,8 @@ export class Unit {
     // bolder than a nervous one. Persists on the member def so it carries
     // across rooms (a member that got beaten down stays shaken).
     const cf = CONFIG.confidence;
-    const bias = cf.personalityBias[this.personality] || 0;
+    const bias = (cf.personalityBias[this.personality] || 0)
+      + (this.aggression - 0.5) * 2 * cf.aggressionBias; // aggression dial -> starting confidence
     this.confidence = clamp(cf.start + bias, cf.min, cf.max);
 
     // Stamina: powers dodges and sprints. Regenerates over time; spending it
@@ -102,8 +115,22 @@ export class Unit {
   // Display name: the member's configured name, or a fallback for enemies.
   get displayName() { return this.def.name || (this.def.kind || 'unit'); }
 
-  takeDamage(amount) {
-    const dmg = Math.max(CONFIG.combat.minDamage, amount - this.armor);
+  takeDamage(amount, attacker = null) {
+    let dmg = Math.max(CONFIG.combat.minDamage, amount - this.armor);
+    // A shield absorbs damage before it reaches health. The shield pool is
+    // consumed first; any overflow carries through to HP.
+    if (this.shield > 0) {
+      const absorbed = Math.min(this.shield, dmg);
+      this.shield -= absorbed;
+      dmg -= absorbed;
+      if (dmg <= 0) return 0; // fully absorbed, no HP loss
+    }
+    // Thorns: reflect a portion of the damage back at the attacker. Only
+    // reflects when the attacker is a real unit (not a burn tick or fall).
+    if (this.thorns > 0 && attacker && attacker.alive && attacker !== this) {
+      const reflected = dmg * this.thorns;
+      attacker.takeDamage(reflected);
+    }
     this.hp -= dmg;
     this._tookDamage = true;
     // Flash white when hit, proportional to the damage taken relative to max

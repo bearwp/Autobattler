@@ -256,11 +256,11 @@ export class Sim {
       'Petra', 'Ronan', 'Sable', 'Talon', 'Una', 'Vance', 'Willa', 'Yuri', 'Zelda'];
     const colors = ['#f87171', '#fb923c', '#fbbf24', '#4ade80', '#22d3ee', '#a78bfa', '#f472b6', '#94a3b8'];
     const shapes = ['square', 'triangle', 'circle'];
-    const atkTypes = ['damage', 'damage', 'damage', 'heal', 'taunt'];
+    const atkTypes = ['damage', 'damage', 'damage', 'heal', 'taunt', 'shield'];
     const atkShapes = ['rangeOneShot', 'rangeAoe', 'meleeOneShot', 'meleeCone', 'meleeAoe'];
     const moves = ['keepDistance', 'kite', 'evade', 'follow', 'advance'];
     const rules = ['lowestHp', 'highestHp', 'closest', 'strongest', 'weakest', 'mostAtOnce', 'threatened'];
-    const modPool = ['taunt', 'lifesteal', 'pierce', 'slow', 'peel', 'evasive'];
+    const modPool = ['taunt', 'lifesteal', 'pierce', 'slow', 'peel', 'evasive', 'burn', 'stun', 'push'];
     const personalities = ['stoic', 'cocky', 'cautious', 'cheerful', 'grumpy', 'nervous', 'chatty'];
 
     const type = atkTypes[Math.floor(Math.random() * atkTypes.length)];
@@ -286,7 +286,7 @@ export class Sim {
         atk: 10 + Math.floor(Math.random() * 25),
       },
       modifiers: mods,
-      target: { side: type === 'heal' ? 'ally' : 'enemy', rule: rules[Math.floor(Math.random() * rules.length)] },
+      target: { side: (type === 'heal' || type === 'shield') ? 'ally' : 'enemy', rule: rules[Math.floor(Math.random() * rules.length)] },
       movement: moves[Math.floor(Math.random() * moves.length)],
       leader: false,
       personality: personalities[Math.floor(Math.random() * personalities.length)],
@@ -494,7 +494,31 @@ export class Sim {
       u.tauntCooldown = Math.max(0, u.tauntCooldown - dt);
       u.kiteTimer = Math.max(0, u.kiteTimer - dt);
       u.slowTimer = Math.max(0, u.slowTimer - dt);
+      u.stunTimer = Math.max(0, u.stunTimer - dt);
       u.dodgeTimer = Math.max(0, u.dodgeTimer - dt);
+      u.summonTimer = Math.max(0, u.summonTimer - dt);
+      // Buff (Warhorn): the damage boost fades over time.
+      if (u.buffTimer > 0) {
+        u.buffTimer = Math.max(0, u.buffTimer - dt);
+        if (u.buffTimer <= 0) u.buffMult = 0;
+      }
+      // Summoned minions crumble after their lifetime expires.
+      if (u.def.kind === 'minion') {
+        u.minionLife -= dt;
+        if (u.minionLife <= 0) u.alive = false;
+      }
+      // Burn: damage over time. Ticks each step while the fire lasts.
+      if (u.burn) {
+        u.burn.life -= dt;
+        const tick = u.burn.dps * dt;
+        u.takeDamage(tick);
+        if (u.burn.life <= 0) u.burn = null;
+      }
+      // Shield decays over time so it's a temporary buffer, not permanent.
+      if (u.shield > 0) {
+        u.shield = Math.max(0, u.shield - dt * CONFIG.combat.shieldDecay);
+        if (u.shield <= 0) u.shieldMax = 0;
+      }
       // Sprinting is a per-frame state: clear it now; _sprint re-sets it only
       // while a sprint is actually happening this frame.
       u.sprinting = false;
@@ -563,6 +587,7 @@ export class Sim {
         u._deathFx = true;
         this.effects.push({
           type: 'death', pos: { ...u.pos }, color: u.def.color, life: 0.4,
+          max: 0.4,
         });
         // Record perma-death for team members.
         if (u.team === 'player') {
@@ -688,8 +713,10 @@ export class Sim {
   }
 
   _checkEnd() {
-    // Lose: all team members dead and none left to enter.
-    if (this._spawnQueue.length === 0 && this.playerUnits.every(u => !u.alive)) {
+    // Lose: all team members dead and none left to enter. Summoned minions
+    // don't count as team members, so a lone minion can't prevent defeat.
+    const realMembers = this.playerUnits.filter(u => u.def.kind !== 'minion');
+    if (this._spawnQueue.length === 0 && realMembers.every(u => !u.alive)) {
       this.over = 'lose';
       return;
     }
@@ -700,6 +727,7 @@ export class Sim {
     const { exit } = CONFIG.doors;
     for (const u of this.playerUnits) {
       if (!u.alive) continue;
+      if (u.def.kind === 'minion') continue; // minions can't clear the room
       if (Math.abs(u.pos.y - exit.y) <= exit.width / 2 && u.pos.x >= exit.x - 1.0) {
         this._roomCleared();
         return;
@@ -851,6 +879,13 @@ export class Sim {
     const enemies = this.enemyUnits.filter(e => e.alive);
     const allies = this.playerUnits.filter(a => a.alive);
 
+    // Stunned: can't move or act until the stun wears off.
+    if (u.stunTimer > 0) {
+      this._intent(u, 'stunned');
+      u.vel = { x: 0, y: 0 };
+      return;
+    }
+
     // Clear the safety direction each frame; it is only re-set when a retreat
     // path actually runs, so the debug arrow doesn't linger while advancing.
     u.safetyDir = null;
@@ -863,6 +898,8 @@ export class Sim {
     let target = pickTarget(u, candidates, u.attack.range);
     if (u.attack.type === 'heal') {
       target = this._healTarget(u, allies);
+    } else if (u.attack.type === 'shield') {
+      target = this._shieldTarget(u, allies);
     } else if (side === 'enemy') {
       target = this._focusFireTarget(u, target, enemies, allies);
       // Leader's play: if the leader called a focus/backline target, prefer it
@@ -978,6 +1015,44 @@ export class Sim {
       if (score > bestScore) { bestScore = score; best = a; }
     }
     return best;
+  }
+
+  // Shielders protect the ally currently under the most threat, so the
+  // barrier lands where it's needed most. Falls back to the most hurt ally.
+  _shieldTarget(u, allies) {
+    let best = null, bestScore = -Infinity;
+    for (const a of allies) {
+      if (a === u || !a.alive) continue;
+      // Skip allies already carrying a fresh shield.
+      if (a.shield > 0 && a.shield >= a.shieldMax * 0.5) continue;
+      let threat = 0;
+      for (const e of this.enemyUnits) {
+        if (!e.alive) continue;
+        const t = e.threat.get(a.id) ?? 0;
+        threat += t;
+      }
+      const missing = a.maxHp - a.hp;
+      const score = threat + missing * 0.5 + this._getBond(u, a) * CONFIG.synergy.healBiasFactor;
+      if (score > bestScore) { bestScore = score; best = a; }
+    }
+    return best;
+  }
+
+  // Raise a disposable minion near the summoner. It rushes the nearest enemy
+  // and splits aggro so the real team stays safe. Tracks its owner so it can
+  // be cleaned up when the room ends.
+  _summonMinion(u, target) {
+    const m = CONFIG.minion;
+    const def = { ...m, name: 'Minion' };
+    const pos = {
+      x: u.pos.x + (target ? (target.pos.x - u.pos.x) * 0.3 : 1),
+      y: u.pos.y + (target ? (target.pos.y - u.pos.y) * 0.3 : 0),
+    };
+    const minion = new Unit(def, { team: 'player', pos });
+    minion.minionOwner = u;
+    minion.minionLife = m.life;
+    this.units.push(minion);
+    this.playerUnits.push(minion);
   }
 
   // Focus fire: prefer an enemy a bonded ally is already attacking, so the
@@ -1179,13 +1254,11 @@ export class Sim {
   // urgent self-preservation instincts (seek heal / hide) so those win.
   _seekSafety(u, enemies, allies, dt) {
     const cf = CONFIG.confidence;
-    // The member's own aggression slider shifts how shaken it must be before
-    // it stops fighting and flees. An aggressive member fights through the
-    // confidence spiral (lower threshold), a cautious one bails to safety
-    // sooner (higher threshold) to avoid it. This is the second half of the
-    // risk dial: the avoid decision sets when to back off a target, this sets
-    // when to give up on the fight entirely.
-    const effThreshold = cf.safetyThreshold * (1.5 - u.aggression);
+    // A shaken member gives up sooner, a confident one keeps fighting. The
+    // per-member difference now comes purely from the dynamic confidence
+    // value (aggression was folded into its starting value), so the seek-
+    // safety trigger is simply "confidence below the safety threshold."
+    const effThreshold = cf.safetyThreshold;
     const active = u.seekingSafety || u.confidence < effThreshold;
     if (!active || u.confidence >= effThreshold + cf.safetyHysteresis) {
       u.seekingSafety = false;
@@ -1562,8 +1635,8 @@ export class Sim {
   _avoidDecision(u, target, enemies, allies) {
     if (!target || !target.alive) return null;
     const it = CONFIG.intel;
-    // Healers don't avoid.
-    if (u.attack.type === 'heal') return null;
+    // Healers and shielders don't avoid.
+    if (u.attack.type === 'heal' || u.attack.type === 'shield') return null;
     // Only cautious when hurt.
     if (u.hp / u.maxHp < it.avoidHpFrac) return null;
     // Must have learned this kind hits hard (shared knowledge, ramped by
@@ -1576,9 +1649,10 @@ export class Sim {
     // before they'll back off.
     const isTank = u.armor >= it.tankArmor;
     if (isTank) danger *= it.tankDangerMult;
-    // Confidence scales the danger threshold: a confident member is braver
-    // (tolerates more danger), a shaken one is more cautious. This makes the
-    // team's nerve an emergent, self-balancing quantity.
+    // Confidence alone scales the danger threshold: a confident member is
+    // braver (tolerates more danger), a shaken one is more cautious. This
+    // makes the team's nerve an emergent, self-balancing quantity. The old
+    // separate aggression multiplier was folded into the starting confidence.
     const cf = CONFIG.confidence;
     // Backup damps the danger threshold: a nearby tank, healer, or ally makes
     // the member braver, so it commits when the team is around and backs off
@@ -1591,11 +1665,7 @@ export class Sim {
       else if (a.attack && a.attack.type === 'heal') backup += cf.backupHealer;
       else backup += cf.backupAlly;
     }
-    // The member's own aggression slider scales the whole threshold: a cautious
-    // member (aggression near 0) backs off at much lower danger, an aggressive
-    // one (near 1) charges into fights it would otherwise avoid.
-    const aggro = 0.4 + u.aggression * 1.2; // 0.4 (retreat) .. 1.6 (aggressive)
-    const threshold = it.avoidDanger * (0.5 + u.confidence * cf.avoidMult) * aggro + backup;
+    const threshold = it.avoidDanger * (0.5 + u.confidence * cf.avoidMult) + backup;
     if (danger <= threshold) return null;
     // Don't avoid if the target is already vulnerable (pounce instead).
     if (target.hp / target.maxHp < it.avoidHpFrac) return null;
@@ -1685,6 +1755,7 @@ export class Sim {
         this._say(u, 'healing', target);
         this.effects.push({
           type: 'heal', from: { ...u.pos }, to: { ...target.pos }, life: 0.4,
+          mag: atk.atk, max: 0.4,
         });
         // Healing generates threat.
         for (const e of enemies) e.addThreat(u, CONFIG.threat.healThreat);
@@ -1725,9 +1796,89 @@ export class Sim {
         if (hit) {
           this.effects.push({
             type: 'taunt', pos: { ...u.pos }, radius, life: 0.5,
+            mag: CONFIG.threat.tauntDuration, max: 0.5,
           });
           this._say(u, 'taunting');
         }
+        break;
+      }
+      case 'shield': {
+        // Barrier: grant the target (an ally) a temporary shield that absorbs
+        // incoming damage. The shield is a flat pool that decays over time, so
+        // it's a proactive buffer rather than a heal. Costs mana like a heal.
+        if (u.maxMana > 0 && u.mana < u.manaCost) {
+          this._intent(u, 'out of mana');
+          break;
+        }
+        if (u.maxMana > 0) u.mana -= u.manaCost;
+        const shield = atk.atk;
+        target.shield = Math.max(target.shield || 0, shield);
+        target.shieldMax = Math.max(target.shieldMax || 0, shield);
+        this._say(u, 'shielding', target);
+        this.effects.push({
+          type: 'shield', from: { ...u.pos }, to: { ...target.pos }, life: 0.4,
+          mag: shield, max: 0.4,
+        });
+        // Shielding generates threat like healing.
+        for (const e of enemies) e.addThreat(u, CONFIG.threat.healThreat);
+        // Shielding strengthens the bond between shielder and target.
+        this._growBond(u, target, CONFIG.synergy.healBond);
+        break;
+      }
+      case 'buff': {
+        // Empower an ally to deal bonus damage for a while. The buff stacks
+        // with the target's own attack, so it shines on a high-damage duelist.
+        if (u.maxMana > 0 && u.mana < u.manaCost) {
+          this._intent(u, 'out of mana');
+          break;
+        }
+        if (u.maxMana > 0) u.mana -= u.manaCost;
+        const b = CONFIG.buff;
+        target.buffTimer = b.duration;
+        target.buffMult = Math.max(target.buffMult || 0, atk.atk);
+        this._say(u, 'buffing', target);
+        this.effects.push({
+          type: 'buff', from: { ...u.pos }, to: { ...target.pos }, life: 0.4,
+          mag: atk.atk, max: 0.4,
+        });
+        // Buffing generates threat like healing (enemies resent the boost).
+        for (const e of enemies) e.addThreat(u, CONFIG.threat.healThreat);
+        this._growBond(u, target, CONFIG.synergy.healBond);
+        break;
+      }
+      case 'mana': {
+        // Restore an ally's mana pool so healers and shielders can keep
+        // casting. Costs the channeler's own mana to transfer.
+        if (u.maxMana > 0 && u.mana < u.manaCost) {
+          this._intent(u, 'out of mana');
+          break;
+        }
+        if (u.maxMana > 0) u.mana -= u.manaCost;
+        if (target.maxMana > 0) {
+          target.mana = Math.min(target.maxMana, target.mana + CONFIG.mana.transfer);
+        }
+        this._say(u, 'channeling', target);
+        this.effects.push({
+          type: 'mana', from: { ...u.pos }, to: { ...target.pos }, life: 0.4,
+          mag: CONFIG.mana.transfer, max: 0.4,
+        });
+        for (const e of enemies) e.addThreat(u, CONFIG.threat.healThreat);
+        this._growBond(u, target, CONFIG.synergy.healBond);
+        break;
+      }
+      case 'summon': {
+        // Raise a disposable minion that rushes the nearest enemy. Capped by
+        // a cooldown and a max-alive limit so it can't flood the field.
+        if (u.summonTimer > 0) break;
+        const aliveMinions = this.playerUnits.filter(x => x.def.kind === 'minion' && x.alive).length;
+        if (aliveMinions >= CONFIG.summon.maxAlive) break;
+        u.summonTimer = CONFIG.summon.cooldown;
+        this._summonMinion(u, target);
+        this._say(u, 'summoning');
+        this.effects.push({
+          type: 'summon', pos: { ...u.pos }, life: 0.4,
+          mag: CONFIG.summon.cooldown, max: 0.4,
+        });
         break;
       }
       case 'damage':
@@ -1762,7 +1913,7 @@ export class Sim {
             }
           }
           if (hit) {
-            this.effects.push({ type: 'taunt', pos: { ...u.pos }, radius, life: 0.5 });
+            this.effects.push({ type: 'taunt', pos: { ...u.pos }, radius, life: 0.5, mag: CONFIG.threat.tauntDuration, max: 0.5 });
           }
           break;
         }
@@ -1790,6 +1941,7 @@ export class Sim {
             behind.addThreat(u, atk.atk * 0.7);
             this.effects.push({
               type: 'pierce', from: { ...u.pos }, to: { ...behind.pos }, life: 0.2,
+              dmg: dealt, max: 0.2,
             });
           }
           break;
@@ -1797,6 +1949,64 @@ export class Sim {
         case 'slow': {
           // Halve the target's speed briefly.
           target.slowTimer = 1.5;
+          break;
+        }
+        case 'burn': {
+          // Ignite the target: deal damage over time. The burn is stored on
+          // the target and ticks each step in the status phase.
+          target.burn = { dps: atk.atk * 0.25, life: 3.0 };
+          this.effects.push({
+            type: 'burn', pos: { ...target.pos }, life: 0.3,
+            mag: 3.0, max: 0.3,
+          });
+          break;
+        }
+        case 'stun': {
+          // Immobilize the target briefly so it can't move or attack.
+          target.stunTimer = 1.2;
+          break;
+        }
+        case 'push': {
+          // Knock the target and any nearby enemies far away from the caster.
+          // A strong, short-lived impulse that scatters the swarm.
+          const radius = atk.range;
+          const strength = CONFIG.combat.knockback * 2.2;
+          let hit = false;
+          for (const e of enemies) {
+            if (!e.alive) continue;
+            if (dist(u.pos, e.pos) <= radius) {
+              this._knockback(e, u.pos, strength);
+              hit = true;
+            }
+          }
+          if (hit) {
+          this.effects.push({
+          type: 'push', pos: { ...u.pos }, radius, life: 0.3,
+          mag: strength, max: 0.3,
+          });
+          }
+          break;
+        }
+        case 'thorns': {
+          // Reflect a portion of melee damage back at attackers. The thorns
+          // value is a fraction (e.g. 0.5 = reflect half). Stored on the unit
+          // so takeDamage can reflect when it is hit.
+          u.thorns = Math.max(u.thorns || 0, 0.5);
+          break;
+        }
+        case 'execute': {
+          // Deal bonus damage to enemies below half health, so the finisher
+          // mows down wounded targets.
+          if (target && target.alive && target.hp / target.maxHp < 0.5) {
+            const bonus = atk.atk * 0.5;
+            const dealt = target.takeDamage(bonus);
+            u.recordDeal(target.def.kind, dealt);
+            target.addThreat(u, bonus);
+            this.effects.push({
+              type: 'execute', pos: { ...target.pos }, life: 0.25,
+              dmg: bonus, max: 0.25,
+            });
+          }
           break;
         }
       }
@@ -1809,6 +2019,8 @@ export class Sim {
     // A charge that connects deals bonus damage, then the charge is spent.
     let dmg = atk.atk + (u.chargeReady ? CONFIG.team.chargeBonus : 0);
     if (u.chargeReady) u.chargeReady = false;
+    // A buff (Warhorn) empowers the target's damage while it lasts.
+    if (u.buffTimer > 0 && u.buffMult > 0) dmg *= 1 + u.buffMult;
     // Team morale: a confident team hits a touch harder, a shaken one softer.
     if (u.team === 'player') {
       dmg *= 1 + CONFIG.morale.dmgMult * (this.morale - 0.5);
@@ -1822,6 +2034,7 @@ export class Sim {
       this.effects.push({
         type: 'attack', from: { ...u.pos }, to: { ...target.pos },
         color: u.team === 'player' ? '#fbbf24' : '#f87171', life: 0.15,
+        dmg: dealt, max: 0.15,
       });
       return;
     }
@@ -1843,6 +2056,7 @@ export class Sim {
       if (hit) {
         this.effects.push({
           type: 'aoe', pos: { ...center }, radius: range, life: 0.25,
+          dmg, max: 0.25,
         });
       }
       return;
@@ -1870,6 +2084,7 @@ export class Sim {
       if (hit) {
         this.effects.push({
           type: 'cleave', pos: { ...u.pos }, dir, arc, range, life: 0.25,
+          dmg, max: 0.25,
         });
       }
       return;
@@ -1885,6 +2100,7 @@ export class Sim {
     this.effects.push({
       type: 'attack', from: { ...u.pos }, to: { ...target.pos },
       color: u.team === 'player' ? '#fbbf24' : '#f87171', life: 0.15,
+      dmg: dealt, max: 0.15,
     });
   }
 
@@ -1893,6 +2109,11 @@ export class Sim {
   // picker (_pickBatTarget) but move and attack differently.
 
   _updateEnemy(u, dt) {
+    // Stunned: can't move or act until the stun wears off.
+    if (u.stunTimer > 0) {
+      u.vel = { x: 0, y: 0 };
+      return;
+    }
     switch (u.def.kind) {
       case 'brute': return this._updateBrute(u, dt);
       case 'spitter': return this._updateSpitter(u, dt);
@@ -1953,7 +2174,7 @@ export class Sim {
     if (this._tryDodge(target, u.def.atk)) {
       this.effects.push({
         type: 'dodge', from: { ...u.pos }, to: { ...target.pos },
-        color: '#a7f3d0', life: 0.2,
+        color: '#a7f3d0', life: 0.2, max: 0.2,
       });
       return;
     }
@@ -1964,7 +2185,7 @@ export class Sim {
     this._knockback(target, u.pos, CONFIG.combat.knockback);
     this.effects.push({
       type: 'attack', from: { ...u.pos }, to: { ...target.pos },
-      color: '#f87171', life: 0.15,
+      color: '#f87171', life: 0.15, dmg: dealt, max: 0.15,
     });
   }
 

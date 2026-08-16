@@ -21,6 +21,11 @@ const mapOverlayEl = document.getElementById('map-overlay');
 const mapSvgEl = document.getElementById('map-svg');
 const restOverlayEl = document.getElementById('rest-overlay');
 const restCandidatesEl = document.getElementById('rest-candidates');
+const rosterOverlayEl = document.getElementById('roster-overlay');
+const rosterGridEl = document.getElementById('roster-grid');
+const rosterCountEl = document.getElementById('roster-count');
+const btnRosterClear = document.getElementById('btn-roster-clear');
+const btnRosterDone = document.getElementById('btn-roster-done');
 
 const sim = new Sim();
 const renderer = new Renderer(canvas);
@@ -55,7 +60,7 @@ function optionList(id, options, labels, value) {
   ).join('');
 }
 
-const ATK_TYPE_LABELS = { damage: 'Damage', heal: 'Heal', taunt: 'Taunt' };
+const ATK_TYPE_LABELS = { damage: 'Damage', heal: 'Heal', taunt: 'Taunt', shield: 'Shield' };
 const SHAPE_LABELS = {
   rangeOneShot: 'Range one-shot', rangeAoe: 'Range AOE', meleeOneShot: 'Melee one-shot',
   meleeCone: 'Melee cone', meleeAoe: 'Melee AOE',
@@ -125,13 +130,6 @@ function memberCard(m) {
           <label class="leader-toggle"><input class="mleaderchk" type="checkbox" ${m.leader ? 'checked' : ''} /> Leader</label>
         </div>
 
-        <div class="chip aggro" title="Caution: how readily this member backs off from danger">
-          <span class="chip-emoji">⚖</span>
-          <span class="chip-num">Retreat</span>
-          <input class="maggression" type="range" min="0" max="1" step="0.05" value="${m.aggression ?? 0.5}" />
-          <span class="chip-num">Aggressive</span>
-        </div>
-
         <div class="mod-row">
           <span class="mod-chips">${modifierChips(mods)}</span>
           <button class="add-mod" title="Add modifier">+</button>
@@ -192,7 +190,6 @@ function readMembers() {
       movement: str('.mmove'),
       leader: card.querySelector('.mleaderchk').checked,
       personality: str('.mpersonality') || 'stoic',
-      aggression: parseFloat(card.querySelector('.maggression').value) || 0.5,
     });
   });
   return members;
@@ -219,7 +216,6 @@ function addMember() {
     movement: 'advance',
     leader: false,
     personality: 'stoic',
-    aggression: 0.5,
   };
   sim.members.push(m);
   const div = document.createElement('div');
@@ -358,19 +354,19 @@ customizerEl.addEventListener('change', (e) => {
   }
 });
 
-// Live-update aggression as the slider is dragged: write it straight back to
-// the member def and any live unit so the change takes effect immediately
-// instead of waiting for Apply.
+// Live-update member changes as inputs are dragged (e.g. personality) write
+// straight back to the member def and any live unit.
 customizerEl.addEventListener('input', (e) => {
-  if (!e.target.matches('.maggression')) return;
-  const card = e.target.closest('.mcard');
-  if (!card) return;
-  const id = card.dataset.id;
-  const val = parseFloat(e.target.value) || 0.5;
-  const member = sim.members.find(m => m.id === id);
-  if (member) member.aggression = val;
-  for (const u of sim.playerUnits) {
-    if (u.def.id === id) u.aggression = val;
+  if (e.target.matches('.mpersonality')) {
+    const card = e.target.closest('.mcard');
+    if (!card) return;
+    const id = card.dataset.id;
+    const val = e.target.value;
+    const member = sim.members.find(m => m.id === id);
+    if (member) member.personality = val;
+    for (const u of sim.playerUnits) {
+      if (u.def.id === id) u.personality = val;
+    }
   }
 });
 
@@ -412,6 +408,78 @@ function buildTeamUi() {
 buildCustomizer();
 buildTeamUi();
 
+// --- Character selection (roster) ---
+// Before the run starts, the player picks up to 4 classes from the roster.
+// Selections seed the customizer with ready-made builds that can be tweaked.
+
+const MAX_PARTY = 4;
+const selectedRoster = new Set(); // roster ids chosen for the party
+
+function rosterCard(c) {
+  const s = c.stats;
+  const a = c.attack;
+  const selected = selectedRoster.has(c.id);
+  return `
+    <div class="roster-card ${selected ? 'selected' : ''}" data-id="${c.id}">
+      <div class="rc-head">
+        <div class="icon">${iconSvg(c)}</div>
+        <span class="rc-name">${c.name}</span>
+        <span class="rc-role">${c.role}</span>
+      </div>
+      <div class="rc-blurb">${c.blurb}</div>
+      <div class="rc-stats">HP ${s.hp} · Arm ${s.armor} · Spd ${s.speed.toFixed(1)}</div>
+      <div class="rc-attack">${ATK_TYPE_LABELS[a.type]} · ${SHAPE_LABELS[a.shape]} · ${MOVE_LABELS[c.movement]}</div>
+      <div class="rc-pick">${selected ? 'Selected' : 'Add to party'}</div>
+    </div>`;
+}
+
+function renderRoster() {
+  rosterGridEl.innerHTML = CONFIG.roster.map(rosterCard).join('');
+  updateRosterFooter();
+}
+
+function updateRosterFooter() {
+  const n = selectedRoster.size;
+  rosterCountEl.textContent = `${n} / ${MAX_PARTY} selected`;
+  btnRosterDone.disabled = n === 0;
+}
+
+// Apply the selected roster to the sim's members and rebuild the UI.
+function applyRoster() {
+  const chosen = CONFIG.roster.filter(c => selectedRoster.has(c.id));
+  sim.members = chosen.map(c => ({ ...c }));
+  sim.reset();
+  buildCustomizer();
+  buildTeamUi();
+}
+
+rosterGridEl.addEventListener('click', (e) => {
+  const card = e.target.closest('.roster-card');
+  if (!card) return;
+  const id = card.dataset.id;
+  if (selectedRoster.has(id)) {
+    selectedRoster.delete(id);
+  } else {
+    if (selectedRoster.size >= MAX_PARTY) return;
+    selectedRoster.add(id);
+  }
+  renderRoster();
+});
+
+btnRosterClear.addEventListener('click', () => {
+  selectedRoster.clear();
+  renderRoster();
+});
+
+btnRosterDone.addEventListener('click', () => {
+  applyRoster();
+  rosterOverlayEl.classList.add('hidden');
+});
+
+// Show the roster on first load (before any run has started).
+rosterOverlayEl.classList.remove('hidden');
+renderRoster();
+
 const dt = 1 / CONFIG.sim.hz;
 let accumulator = 0;
 let lastTime = performance.now();
@@ -429,7 +497,7 @@ function frame(now) {
   }
   if (steps === CONFIG.sim.maxSubSteps) accumulator = 0;
 
-  renderer.render(sim);
+  renderer.render(sim, elapsed);
   updateHud();
   updateTeamUi();
   updateMap();
@@ -486,7 +554,14 @@ function updateTeamUi() {
   }
 }
 
-btnStart.addEventListener('click', () => sim.start());
+btnStart.addEventListener('click', () => {
+  // If the roster is still open, route through it instead of starting raw.
+  if (!rosterOverlayEl.classList.contains('hidden')) {
+    btnRosterDone.click();
+    return;
+  }
+  sim.start();
+});
 btnRestart.addEventListener('click', () => sim.reset());
 
 // --- Debug panel ---
@@ -662,10 +737,6 @@ function unitCard(u) {
     const confPct = Math.round(u.confidence * 100);
     const confCls = u.confidence < 0.4 ? 'dbg-hp low' : u.confidence > 0.6 ? 'dbg-hp ok' : '';
     moraleHtml += `<div class="dbg-row"><b>Confidence</b><span class="${confCls}">${confPct}%</span></div>`;
-    // Aggression: this member's own Retreat/Aggressive setting.
-    const aggroPct = Math.round(u.aggression * 100);
-    const aggroCls = u.aggression < 0.4 ? 'dbg-hp low' : u.aggression > 0.6 ? 'dbg-hp ok' : '';
-    moraleHtml += `<div class="dbg-row"><b>Aggression</b><span class="${aggroCls}">${aggroPct}%</span></div>`;
     // Safety direction, if this member is retreating this frame.
     if (u.safetyDir && (u.safetyDir.x !== 0 || u.safetyDir.y !== 0)) {
       moraleHtml += `<div class="dbg-row"><b>Safety</b><span class="dbg-goal">(${u.safetyDir.x.toFixed(2)}, ${u.safetyDir.y.toFixed(2)})</span></div>`;
@@ -962,6 +1033,10 @@ document.getElementById('btn-finish-rest').addEventListener('click', () => {
 window.addEventListener('keydown', (e) => {
   if (e.code === 'Space') {
     e.preventDefault();
+    if (!rosterOverlayEl.classList.contains('hidden')) {
+      btnRosterDone.click();
+      return;
+    }
     sim.start();
   } else if (e.code === 'KeyR') {
     sim.reset();

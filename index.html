@@ -164,8 +164,6 @@
     .chip.atk { border-color: #3a3a55; }
     .chip.tgt { border-color: #3a4a3a; }
     .chip.move { border-color: #4a3a3a; }
-    .chip.aggro { border-color: #4a3a4a; }
-    .chip.aggro input[type="range"] { width: 90px; accent-color: #1d4ed8; }
 
     .mod-row { display: flex; align-items: center; gap: 5px; }
     .mod-chips { display: inline-flex; flex-wrap: wrap; gap: 4px; }
@@ -246,6 +244,62 @@
     .map-node.done circle { opacity: 0.5; }
     .map-edge { stroke: #3a3a45; stroke-width: 2; }
     .map-edge.available { stroke: #fbbf24; }
+
+    /* Roster / character selection overlay */
+    #roster-overlay {
+      position: fixed; inset: 0; z-index: 220;
+      background: rgba(0, 0, 0, 0.8);
+      display: flex; align-items: center; justify-content: center;
+    }
+    #roster-overlay.hidden { display: none; }
+    .roster-panel {
+      background: #1e1e26; border: 1px solid #3a3a45; border-radius: 12px;
+      padding: 20px 24px; max-width: 92vw; max-height: 92vh;
+      display: flex; flex-direction: column; gap: 12px;
+    }
+    .roster-panel h3 { margin: 0; color: #e0e0e0; font-size: 16px; }
+    .roster-panel .roster-sub { margin: 0; color: #888; font-size: 12px; }
+    #roster-grid {
+      display: flex; gap: 12px; flex-wrap: wrap;
+      overflow-y: auto; justify-content: center;
+    }
+    .roster-card {
+      background: #16161d; border: 1px solid #2a2a35; border-radius: 8px;
+      padding: 12px; display: flex; flex-direction: column; gap: 6px;
+      width: 180px; cursor: pointer; transition: border-color 0.1s, transform 0.1s;
+    }
+    .roster-card:hover { border-color: #fbbf24; transform: translateY(-2px); }
+    .roster-card.selected { border-color: #4ade80; background: #16211a; }
+    .roster-card .rc-head { display: flex; align-items: center; gap: 8px; }
+    .roster-card .rc-head .icon { width: 24px; height: 24px; flex: 0 0 auto; }
+    .roster-card .rc-name { color: #e0e0e0; font-weight: 600; font-size: 13px; }
+    .roster-card .rc-role {
+      color: #fbbf24; font-size: 10px; text-transform: uppercase;
+      letter-spacing: 0.05em; margin-left: auto;
+    }
+    .roster-card .rc-blurb { color: #888; font-size: 11px; line-height: 1.35; min-height: 48px; }
+    .roster-card .rc-stats { color: #aaa; font-size: 11px; }
+    .roster-card .rc-attack { color: #7dd3fc; font-size: 11px; }
+    .roster-card .rc-pick {
+      background: #2a2a35; color: #e0e0e0; border: 1px solid #3a3a45;
+      border-radius: 6px; padding: 5px 0; font-size: 12px; text-align: center;
+    }
+    .roster-card.selected .rc-pick { background: #1d4ed8; border-color: #2563eb; color: #fff; }
+    .roster-card.disabled { opacity: 0.4; cursor: not-allowed; }
+    .roster-card.disabled:hover { border-color: #2a2a35; transform: none; }
+    .roster-footer {
+      display: flex; align-items: center; gap: 12px;
+      border-top: 1px solid #2a2a35; padding-top: 12px;
+    }
+    .roster-footer .roster-count { color: #aaa; font-size: 12px; flex: 1; }
+    .roster-footer button {
+      background: #2a2a35; color: #e0e0e0; border: 1px solid #3a3a45;
+      padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 13px;
+    }
+    .roster-footer button:hover { background: #3a3a45; }
+    .roster-footer button.primary { background: #1d4ed8; border-color: #2563eb; color: #fff; }
+    .roster-footer button.primary:hover { background: #2563eb; }
+    .roster-footer button.primary:disabled { background: #2a2a35; border-color: #3a3a45; color: #666; cursor: not-allowed; }
 
     /* Rest overlay */
     #rest-overlay {
@@ -403,6 +457,18 @@
       <div id="member-list"></div>
     </div>
     <div id="team-ui"></div>
+    <div id="roster-overlay" class="hidden">
+      <div class="roster-panel">
+        <h3>Choose your party</h3>
+        <p class="roster-sub">Pick up to 4 classes to form your team. You can fine-tune them in the customizer afterward.</p>
+        <div id="roster-grid"></div>
+        <div class="roster-footer">
+          <span class="roster-count" id="roster-count">0 / 4 selected</span>
+          <button id="btn-roster-clear">Clear</button>
+          <button id="btn-roster-done" class="primary" disabled>Start</button>
+        </div>
+      </div>
+    </div>
     <div id="map-overlay" class="hidden">
       <div class="map-panel">
         <h3>Choose your path</h3>

@@ -5,7 +5,7 @@
 // These are the options the customizer offers. The sim reads member bundles
 // (see `members` below) and behaves generically; there are no fixed classes.
 
-export const ATTACK_TYPES = ['damage', 'heal', 'taunt'];
+export const ATTACK_TYPES = ['damage', 'heal', 'taunt', 'shield', 'buff', 'mana', 'summon'];
 
 export const TARGET_RULES = [
   'lowestHp', 'highestHp', 'closest', 'strongest', 'weakest', 'mostAtOnce', 'threatened',
@@ -28,6 +28,11 @@ export const MODIFIERS = [
   { id: 'slow',      label: 'Slow',      desc: 'Halve target speed briefly' },
   { id: 'peel',      label: 'Peel',      desc: 'Rush to defend squishy allies under attack' },
   { id: 'evasive',   label: 'Evasive',   desc: 'Back away from whoever is targeting you' },
+  { id: 'burn',      label: 'Burn',      desc: 'Ignite the target, dealing damage over time' },
+  { id: 'stun',      label: 'Stun',       desc: 'Briefly immobilize the target' },
+  { id: 'push',      label: 'Push',       desc: 'Knock the target and nearby enemies far away' },
+  { id: 'thorns',    label: 'Thorns',     desc: 'Reflect a portion of melee damage back at attackers' },
+  { id: 'execute',   label: 'Execute',    desc: 'Deal bonus damage to enemies below half health' },
 ];
 
 // Self-preservation instincts: situational movement overrides that kick in
@@ -113,12 +118,206 @@ export const CONFIG = {
     },
   ],
 
+  // Roster of predefined classes the player can pick from on the character
+  // selection screen. Each is a full member bundle (same shape as `members`),
+  // plus a `role` and `blurb` used for the selection card. Picking one seeds
+  // the customizer with a ready-made build the player can then tweak.
+  roster: [
+    {
+      id: 'r-tank', name: 'Bulwark', role: 'Tank', color: '#3b82f6', shape: 'square',
+      blurb: 'A walking wall. Taunts enemies, soaks damage, and peels for squishy allies.',
+      stats: { hp: 320, armor: 10, speed: 2.2, size: 0.9 },
+      attack: { type: 'taunt', shape: 'meleeOneShot', range: 4.0, atk: 14 },
+      modifiers: ['peel'],
+      selfPreservation: [],
+      target: { side: 'enemy', rule: 'closest' },
+      movement: 'advance', leader: true, personality: 'stoic', aggression: 0.9,
+    },
+    {
+      id: 'r-soldier', name: 'Vanguard', role: 'Bruiser', color: '#ef4444', shape: 'square',
+      blurb: 'A relentless front-liner. Charges in, cleaves crowds, and heals off every hit.',
+      stats: { hp: 130, armor: 3, speed: 3.0, size: 0.7 },
+      attack: { type: 'damage', shape: 'meleeCone', range: 1.8, atk: 22 },
+      modifiers: ['lifesteal'],
+      selfPreservation: [],
+      target: { side: 'enemy', rule: 'closest' },
+      movement: 'charge', leader: false, personality: 'cocky', aggression: 0.7,
+    },
+    {
+      id: 'r-archer', name: 'Ranger', role: 'Ranged', color: '#22c55e', shape: 'triangle',
+      blurb: 'A skirmisher who kites from range, pierces through lines, and hides when threatened.',
+      stats: { hp: 75, armor: 0, speed: 3.0, size: 0.7 },
+      attack: { type: 'damage', shape: 'rangeOneShot', range: 7.0, atk: 15 },
+      modifiers: ['pierce'],
+      selfPreservation: ['hide'],
+      target: { side: 'enemy', rule: 'lowestHp' },
+      movement: 'kite', leader: false, personality: 'cautious', aggression: 0.3,
+    },
+    {
+      id: 'r-healer', name: 'Cleric', role: 'Support', color: '#f8fafc', shape: 'circle',
+      blurb: 'Keeps the team alive. Heals the lowest ally and stays safely at range.',
+      stats: { hp: 60, armor: 0, speed: 3.0, size: 0.7, mana: { max: 100, cost: 25 } },
+      attack: { type: 'heal', shape: 'rangeOneShot', range: 6.0, atk: 19 },
+      modifiers: [],
+      selfPreservation: ['hide'],
+      target: { side: 'ally', rule: 'lowestHp' },
+      movement: 'keepDistance', leader: false, personality: 'cheerful', aggression: 0.4,
+    },
+    {
+      id: 'r-mage', name: 'Pyromancer', role: 'AOE', color: '#f97316', shape: 'circle',
+      blurb: 'Burns whole clusters at once. Fragile, so it keeps distance and slows pursuers.',
+      stats: { hp: 70, armor: 0, speed: 2.8, size: 0.6 },
+      attack: { type: 'damage', shape: 'rangeAoe', range: 6.0, atk: 18 },
+      modifiers: ['slow'],
+      selfPreservation: ['hide'],
+      target: { side: 'enemy', rule: 'mostAtOnce' },
+      movement: 'keepDistance', leader: false, personality: 'nervous', aggression: 0.3,
+    },
+    {
+      id: 'r-assassin', name: 'Shadow', role: 'Assassin', color: '#a78bfa', shape: 'triangle',
+      blurb: 'Hunts the weakest enemy and finishes it off. Evasive and deadly up close.',
+      stats: { hp: 90, armor: 1, speed: 3.6, size: 0.6 },
+      attack: { type: 'damage', shape: 'meleeOneShot', range: 1.4, atk: 30 },
+      modifiers: ['evasive'],
+      selfPreservation: ['hide'],
+      target: { side: 'enemy', rule: 'weakest' },
+      movement: 'hunt', leader: false, personality: 'grumpy', aggression: 0.8,
+    },
+    {
+      id: 'r-guardian', name: 'Warden', role: 'Guard', color: '#22d3ee', shape: 'square',
+      blurb: 'Sticks to a chosen ally and guards them, engaging anything that gets close.',
+      stats: { hp: 200, armor: 7, speed: 2.6, size: 0.8 },
+      attack: { type: 'damage', shape: 'meleeOneShot', range: 1.6, atk: 16 },
+      modifiers: ['taunt'],
+      selfPreservation: [],
+      target: { side: 'enemy', rule: 'threatened' },
+      movement: 'guard', leader: false, personality: 'stoic', aggression: 0.6,
+    },
+    {
+      id: 'r-berserker', name: 'Berserker', role: 'Duelist', color: '#f472b6', shape: 'square',
+      blurb: 'A glass cannon that flanks and shreds a single target with brutal strikes.',
+      stats: { hp: 110, armor: 2, speed: 3.4, size: 0.7 },
+      attack: { type: 'damage', shape: 'meleeOneShot', range: 1.5, atk: 34 },
+      modifiers: ['lifesteal'],
+      selfPreservation: [],
+      target: { side: 'enemy', rule: 'strongest' },
+      movement: 'flank', leader: false, personality: 'cocky', aggression: 0.9,
+    },
+    {
+      id: 'r-stormcaller', name: 'Stormcaller', role: 'Disruptor', color: '#22d3ee', shape: 'circle',
+      blurb: 'Blasts a shockwave that knocks enemies far away, scattering the swarm and buying the team space.',
+      stats: { hp: 80, armor: 1, speed: 3.0, size: 0.6 },
+      attack: { type: 'damage', shape: 'rangeAoe', range: 5.0, atk: 12 },
+      modifiers: ['push'],
+      selfPreservation: ['hide'],
+      target: { side: 'enemy', rule: 'mostAtOnce' },
+      movement: 'keepDistance', leader: false, personality: 'cautious', aggression: 0.4,
+    },
+    {
+      id: 'r-sentinel', name: 'Sentinel', role: 'Protector', color: '#60a5fa', shape: 'square',
+      blurb: 'Wraps the most threatened ally in a barrier, absorbing hits before they land.',
+      stats: { hp: 150, armor: 5, speed: 2.8, size: 0.8, mana: { max: 100, cost: 25 } },
+      attack: { type: 'shield', shape: 'rangeOneShot', range: 6.0, atk: 40 },
+      modifiers: ['peel'],
+      selfPreservation: [],
+      target: { side: 'ally', rule: 'threatened' },
+      movement: 'guard', leader: false, personality: 'stoic', aggression: 0.5,
+    },
+    {
+      id: 'r-hexer', name: 'Hexer', role: 'Debuffer', color: '#c084fc', shape: 'circle',
+      blurb: 'Curses the strongest enemy, stunning and slowing it so the team can shred it safely.',
+      stats: { hp: 70, armor: 0, speed: 2.8, size: 0.6 },
+      attack: { type: 'damage', shape: 'rangeOneShot', range: 6.0, atk: 12 },
+      modifiers: ['stun', 'slow'],
+      selfPreservation: ['hide'],
+      target: { side: 'enemy', rule: 'strongest' },
+      movement: 'keepDistance', leader: false, personality: 'grumpy', aggression: 0.3,
+    },
+    {
+      id: 'r-crusader', name: 'Crusader', role: 'Off-tank', color: '#fbbf24', shape: 'square',
+      blurb: 'A second front line that clumps enemies with a sweeping arc and taunts them off the backline.',
+      stats: { hp: 220, armor: 8, speed: 2.4, size: 0.8 },
+      attack: { type: 'damage', shape: 'meleeAoe', range: 2.2, atk: 16 },
+      modifiers: ['taunt'],
+      selfPreservation: [],
+      target: { side: 'enemy', rule: 'mostAtOnce' },
+      movement: 'advance', leader: false, personality: 'stoic', aggression: 0.8,
+    },
+    {
+      id: 'r-warhorn', name: 'Warhorn', role: 'Buffer', color: '#fde047', shape: 'circle',
+      blurb: 'Rallies the team, empowering the strongest ally to hit far harder for a while.',
+      stats: { hp: 90, armor: 2, speed: 3.0, size: 0.6 },
+      attack: { type: 'buff', shape: 'rangeOneShot', range: 6.0, atk: 0.5 },
+      modifiers: [],
+      selfPreservation: ['hide'],
+      target: { side: 'ally', rule: 'strongest' },
+      movement: 'keepDistance', leader: false, personality: 'cheerful', aggression: 0.4,
+    },
+    {
+      id: 'r-necro', name: 'Necromancer', role: 'Summoner', color: '#a3e635', shape: 'circle',
+      blurb: 'Raises a disposable minion that rushes the swarm, splitting aggro and soaking hits.',
+      stats: { hp: 80, armor: 1, speed: 2.8, size: 0.6 },
+      attack: { type: 'summon', shape: 'rangeOneShot', range: 6.0, atk: 1 },
+      modifiers: [],
+      selfPreservation: ['hide'],
+      target: { side: 'enemy', rule: 'closest' },
+      movement: 'keepDistance', leader: false, personality: 'nervous', aggression: 0.3,
+    },
+    {
+      id: 'r-executioner', name: 'Executioner', role: 'Finisher', color: '#f87171', shape: 'triangle',
+      blurb: 'Hunts the biggest threat and executes it, dealing bonus damage to wounded enemies.',
+      stats: { hp: 120, armor: 3, speed: 3.2, size: 0.7 },
+      attack: { type: 'damage', shape: 'meleeOneShot', range: 1.6, atk: 26 },
+      modifiers: ['execute'],
+      selfPreservation: [],
+      target: { side: 'enemy', rule: 'highestHp' },
+      movement: 'hunt', leader: false, personality: 'cocky', aggression: 0.8,
+    },
+    {
+      id: 'r-thorn', name: 'Thorn', role: 'Reflect tank', color: '#4ade80', shape: 'square',
+      blurb: 'A living shield that reflects melee damage back at attackers, punishing anyone who hits it.',
+      stats: { hp: 260, armor: 9, speed: 2.2, size: 0.9 },
+      attack: { type: 'damage', shape: 'meleeOneShot', range: 1.6, atk: 12 },
+      modifiers: ['thorns'],
+      selfPreservation: [],
+      target: { side: 'enemy', rule: 'closest' },
+      movement: 'advance', leader: false, personality: 'stoic', aggression: 0.7,
+    },
+    {
+      id: 'r-channeler', name: 'Channeler', role: 'Mana battery', color: '#38bdf8', shape: 'circle',
+      blurb: 'Feeds mana to the most powerful ally, keeping healers and shielders casting nonstop.',
+      stats: { hp: 70, armor: 0, speed: 2.8, size: 0.6, mana: { max: 120, cost: 20 } },
+      attack: { type: 'mana', shape: 'rangeOneShot', range: 6.0, atk: 30 },
+      modifiers: [],
+      selfPreservation: ['hide'],
+      target: { side: 'ally', rule: 'strongest' },
+      movement: 'keepDistance', leader: false, personality: 'cheerful', aggression: 0.3,
+    },
+  ],
+
   // Universal secondary attack: every member has a short melee attack so a
   // healer/taunt/ranged unit can still defend itself up close.
   secondary: {
     range: 1.0,             // short melee reach
     atk: 6,                 // damage dealt by the secondary attack
     cooldown: 0.8,
+  },
+
+  // Buff (Warhorn): empower an ally to deal bonus damage for a while.
+  buff: {
+    duration: 4.0,          // seconds the buff lasts
+    dmgMult: 0.5,           // +50% damage while buffed
+  },
+
+  // Mana transfer (Channeler): restore an ally's mana pool.
+  mana: {
+    transfer: 30,           // mana granted per cast
+  },
+
+  // Summon (Necromancer): raise a disposable minion.
+  summon: {
+    cooldown: 3.0,          // seconds between summons
+    maxAlive: 2,            // cap on simultaneous minions
   },
 
   // Enemy type definitions. Each has a `kind` that selects its AI behavior
@@ -148,6 +347,17 @@ export const CONFIG = {
 
   // Weighted chance each enemy type is chosen for a combat room.
   enemyWeights: { bat: 0.4, brute: 0.2, spitter: 0.2, wisp: 0.2 },
+
+  // Summoned minion (Necromancer). A small, disposable ally that rushes the
+  // nearest enemy and splits aggro so the real team stays safe.
+  minion: {
+    kind: 'minion', hp: 60, atk: 10, range: 0.8, speed: 4.2, armor: 0,
+    color: '#a3e635', shape: 'circle', size: 0.4,
+    life: 12,               // seconds before the minion crumbles
+    attack: { type: 'damage', shape: 'meleeOneShot', range: 0.8, atk: 10 },
+    target: { side: 'enemy', rule: 'closest' },
+    movement: 'hunt',
+  },
 
   // Map (Slay the Spire style): a branching node graph the player navigates
   // between rooms. Each node is a room with a type that changes its content.
@@ -188,6 +398,7 @@ export const CONFIG = {
     knockbackDecay: 6.0,   // how fast a knockback impulse fades (per second)
     hitFlashDecay: 2.0,    // how fast the white damage flash fades (per second)
     windupTime: 0.4,       // enemy telegraph before a hit lands (gives a dodge window)
+    shieldDecay: 6.0,      // shield pool lost per second (temporary barrier)
   },
 
   // Stamina: a per-member resource that powers dodges and sprints. It
@@ -299,9 +510,15 @@ export const CONFIG = {
   // bolder than a nervous one.
   confidence: {
     start: 0.5,             // base starting confidence
+    // Per-member starting bias. Personality biases the value, and the (now
+    // static) aggression dial folds in as an additive offset so an
+    // aggressive member simply starts bolder. There is no separate combat
+    // aggression axis anymore: one continuous confidence value drives
+    // bravery, and it evolves dynamically as the fight plays out.
     personalityBias: {      // additive starting offset per personality
       cocky: 0.3, cheerful: 0.2, stoic: 0.1, cautious: -0.1, grumpy: -0.1, nervous: -0.3, chatty: 0.1,
     },
+    aggressionBias: 0.4,    // aggression dial scales this: 0 -> -0.2, 1 -> +0.2 starting confidence
     hitDrop: 0.08,          // confidence lost each time the member is hit
     avoidDrop: 0.12,        // confidence lost each time the member backs off (retreat/hold)
     recoverRate: 0.06,      // confidence gained per second while safe
@@ -403,6 +620,38 @@ export const CONFIG = {
         '{name}: Eyes on me!',
         '{name}: I\'m the one you want!',
         '{name}: Too scared to face me?',
+      ],
+      shielding: [
+        '{name}: Shield up, {target}!',
+        '{name}: I\'ve got you, {target}.',
+        '{name}: Stay behind me, {target}.',
+        '{name}: Barrier on {target}!',
+        '{name}: You\'re protected, {target}.',
+        '{name}: Nothing gets through to {target}.',
+      ],
+      buffing: [
+        '{name}: Fight harder, {target}!',
+        '{name}: I\'m empowering {target}!',
+        '{name}: Feel the surge, {target}!',
+        '{name}: {target}, strike true!',
+        '{name}: Power to {target}!',
+        '{name}: Rage on, {target}!',
+      ],
+      channeling: [
+        '{name}: Mana to {target}!',
+        '{name}: Take my energy, {target}.',
+        '{name}: {target}, keep casting!',
+        '{name}: I\'m feeding {target} power.',
+        '{name}: Don\'t run dry, {target}.',
+        '{name}: Here\'s your fuel, {target}.',
+      ],
+      summoning: [
+        '{name}: Rise, my servant!',
+        '{name}: To me, minion!',
+        '{name}: Go, my little one!',
+        '{name}: Serve me, creature!',
+        '{name}: Another one joins the fray!',
+        '{name}: My minion, attack!',
       ],
       killing: [
         '{name}: Got one!',
