@@ -72,19 +72,58 @@ function iconSvg(def) {
   }
 }
 
-function optionList(id, options, labels, value) {
+function optionList(id, options, labels, value, tips) {
   return options.map((o, i) =>
-    `<option value="${o}" ${o === value ? 'selected' : ''}>${labels ? labels[i] : o}</option>`
+    `<option value="${o}" ${o === value ? 'selected' : ''}${tips && tips[i] ? ` title="${tips[i]}"` : ''}>${labels ? labels[i] : o}</option>`
   ).join('');
 }
 
-const ATK_TYPE_LABELS = { damage: 'Damage', heal: 'Heal', taunt: 'Taunt', shield: 'Shield' };
+const ATK_TYPE_LABELS = { damage: 'Damage', heal: 'Heal', taunt: 'Taunt', shield: 'Shield', push: 'Push' };
 const SHAPE_LABELS = {
   rangeOneShot: 'Range one-shot', rangeAoe: 'Range AOE', meleeOneShot: 'Melee one-shot',
   meleeCone: 'Melee cone', meleeAoe: 'Melee AOE',
 };
 const RULE_LABELS = { lowestHp: 'Lowest HP', highestHp: 'Highest HP', closest: 'Closest', strongest: 'Strongest', weakest: 'Weakest', mostAtOnce: 'Most at once', threatened: 'Threatened' };
 const PERSONALITIES = ['stoic', 'cocky', 'cautious', 'cheerful', 'grumpy', 'nervous', 'chatty'];
+
+// Plain-language explanations for every buildable keyword. Keyed by the id
+// used in the vocab arrays; surfaced as native option tooltips (hover the
+// dropdown) and in the in-game glossary ("?" button).
+const KEYWORD_DESC = {
+  // Attack types
+  damage: 'Strike the target for your Pwr as damage.',
+  heal: 'Restore Pwr HP to an ally. Costs mana if you have it.',
+  taunt: 'Force nearby enemies to attack you for a few seconds.',
+  shield: 'Grant an ally a Pwr-sized barrier that absorbs damage.',
+  buff: 'Boost an ally\u2019s damage by +50% for 4s.',
+  mana: 'Transfer 30 mana to an ally so they can keep casting.',
+  summon: 'Raise a disposable minion (up to 2 at once) that rushes the enemy.',
+  push: 'Knock the target and nearby enemies far away, scattering them.',
+  // Attack shapes
+  rangeOneShot: 'Ranged attack that hits a single target.',
+  rangeAoe: 'Ranged attack that hits all enemies within range of the target.',
+  meleeOneShot: 'Melee attack that hits a single target.',
+  meleeCone: 'Melee arc attack that hits enemies in front of you.',
+  meleeAoe: 'Melee attack that hits all enemies around you.',
+  // Target rules
+  lowestHp: 'Target the enemy with the lowest HP.',
+  highestHp: 'Target the enemy with the highest HP.',
+  closest: 'Target the nearest enemy.',
+  strongest: 'Target the enemy with the highest attack power.',
+  weakest: 'Target the enemy with the lowest attack power.',
+  mostAtOnce: 'Target the spot where an attack will hit the most enemies.',
+  threatened: 'Target the enemy that poses the most threat to you.',
+  // Self-preservation instincts
+  hide: 'Retreat behind your tankiest ally when threatened.',
+  seekHeal: 'Run to a healer ally when badly hurt.',
+  // Misc
+  leader: 'Calls coordinated plays for the whole team, directing focus fire and retreats.',
+  confidence: 'How brave this member is (0-1). It falls under pressure, recovers over time toward this base, and drives how much danger the member tolerates before backing off.',
+  stamina: 'This member\u2019s stamina pool size. Stamina powers dodging and sprinting.',
+  staminaRegen: 'How fast this member\u2019s stamina refills each second. High regen means dodging and sprinting often.',
+};
+
+function keywordTip(key) { return KEYWORD_DESC[key] || ''; }
 
 function modifierChips(mods) {
   return mods.map(mid => {
@@ -128,8 +167,8 @@ function memberCard(m) {
 
         <div class="chip atk" title="Attack">
           <span class="chip-emoji">⚔</span>
-          <select class="matktype">${optionList('atktype', ATTACK_TYPES, ['Damage', 'Heal', 'Taunt'], a.type)}</select>
-          <select class="matkshape">${optionList('atkshape', ATTACK_SHAPES, ['Range one-shot', 'Range AOE', 'Melee one-shot', 'Melee cone', 'Melee AOE'], a.shape)}</select>
+          <select class="matktype">${optionList('atktype', ATTACK_TYPES, ATTACK_TYPES.map(t => ATK_TYPE_LABELS[t] || t), a.type, ATTACK_TYPES.map(t => keywordTip(t)))}</select>
+          <select class="matkshape">${optionList('atkshape', ATTACK_SHAPES, ['Range one-shot', 'Range AOE', 'Melee one-shot', 'Melee cone', 'Melee AOE'], a.shape, ATTACK_SHAPES.map(s => keywordTip(s)))}</select>
           <span class="chip-num">Rng <input class="matkrange" type="number" value="${a.range}" min="0.5" step="0.1" /></span>
           <span class="chip-num">Pwr <input class="matk" type="number" value="${a.atk}" min="0" /></span>
         </div>
@@ -137,13 +176,20 @@ function memberCard(m) {
         <div class="chip tgt" title="Targeting">
           <span class="chip-emoji">🎯</span>
           <select class="mtside">${optionList('tside', ['enemy', 'ally'], ['Enemy', 'Ally'], m.target.side)}</select>
-          <select class="mtrule">${optionList('trule', TARGET_RULES, ['Lowest HP', 'Highest HP', 'Closest', 'Strongest', 'Weakest', 'Most at once', 'Threatened'], m.target.rule)}</select>
+          <select class="mtrule">${optionList('trule', TARGET_RULES, ['Lowest HP', 'Highest HP', 'Closest', 'Strongest', 'Weakest', 'Most at once', 'Threatened'], m.target.rule, TARGET_RULES.map(r => keywordTip(r)))}</select>
         </div>
 
         <div class="chip move" title="Personality">
           <span class="chip-emoji">🧠</span>
           <select class="mpersonality" title="Personality">${optionList('personality', PERSONALITIES, ['Stoic', 'Cocky', 'Cautious', 'Cheerful', 'Grumpy', 'Nervous'], m.personality)}</select>
           <label class="leader-toggle"><input class="mleaderchk" type="checkbox" ${m.leader ? 'checked' : ''} /> Leader</label>
+        </div>
+
+        <div class="chip trait" title="Morale & stamina">
+          <span class="chip-emoji">🎗</span>
+          <span class="chip-num" title="${keywordTip('confidence')}">Conf <input class="mconfidence" type="number" value="${m.confidence ?? 0.5}" min="0.1" max="1" step="0.05" /></span>
+          <span class="chip-num" title="${keywordTip('stamina')}">Stam <input class="mstammax" type="number" value="${(s.stamina && s.stamina.max) || CONFIG.stamina.max}" min="10" /></span>
+          <span class="chip-num" title="${keywordTip('staminaRegen')}">Regen <input class="mstamregen" type="number" value="${(s.stamina && s.stamina.regen) || CONFIG.stamina.regen}" min="0" step="1" /></span>
         </div>
 
         <div class="mod-row">
@@ -192,6 +238,7 @@ function readMembers() {
         armor: num('.marmor'),
         speed: num('.mspeed'),
         size: num('.msize'),
+        ...(card.querySelector('.mstammax') ? { stamina: { max: num('.mstammax'), regen: num('.mstamregen') } } : {}),
       },
       attack: {
         type: str('.matktype'),
@@ -204,6 +251,7 @@ function readMembers() {
       target: { side: str('.mtside'), rule: str('.mtrule') },
       leader: card.querySelector('.mleaderchk').checked,
       personality: str('.mpersonality') || 'stoic',
+      confidence: num('.mconfidence'),
     });
   });
   return members;
@@ -222,13 +270,14 @@ function addMember() {
     name: 'Member ' + (sim.members.length + 1),
     color: '#94a3b8',
     shape: 'square',
-    stats: { hp: 100, armor: 0, speed: 3.0, size: 0.7 },
+    stats: { hp: 100, armor: 0, speed: 3.0, size: 0.7, stamina: { max: 100, regen: 12 } },
     attack: { type: 'damage', shape: 'meleeOneShot', range: 1.2, atk: 15 },
     modifiers: [],
     selfPreservation: [],
     target: { side: 'enemy', rule: 'closest' },
     leader: false,
     personality: 'stoic',
+    confidence: 0.5,
   };
   sim.members.push(m);
   const div = document.createElement('div');
@@ -386,6 +435,35 @@ customizerEl.addEventListener('input', (e) => {
 document.getElementById('btn-add-member').addEventListener('click', addMember);
 document.getElementById('btn-apply').addEventListener('click', applyMembers);
 
+// --- Glossary ---
+const glossaryOverlayEl = document.getElementById('glossary-overlay');
+const glossaryBodyEl = document.getElementById('glossary-body');
+
+function glossarySections() {
+  return [
+    { title: 'Attack types', items: ATTACK_TYPES.map(t => [ATK_TYPE_LABELS[t] || t, keywordTip(t)]) },
+    { title: 'Attack shapes', items: ATTACK_SHAPES.map(s => [SHAPE_LABELS[s], keywordTip(s)]) },
+    { title: 'Target rules', items: TARGET_RULES.map(r => [RULE_LABELS[r], keywordTip(r)]) },
+    { title: 'Modifiers', items: MODIFIERS.map(m => [m.label, m.desc]) },
+    { title: 'Instincts', items: SELF_PRESERVATION.map(m => [m.label, m.desc]) },
+    { title: 'Traits', items: [['Confidence', keywordTip('confidence')], ['Stamina', keywordTip('stamina')], ['Stamina regen', keywordTip('staminaRegen')]] },
+  ].filter(s => s.items.every(([, d]) => d));
+}
+
+function renderGlossary() {
+  glossaryBodyEl.innerHTML = glossarySections().map(s => `
+    <div class="glossary-group-title">${s.title}</div>
+    ${s.items.map(([name, desc]) => `<div class="glossary-item"><b>${name}</b><span>${desc}</span></div>`).join('')}
+  `).join('');
+  glossaryOverlayEl.classList.remove('hidden');
+}
+
+document.getElementById('btn-glossary').addEventListener('click', renderGlossary);
+document.getElementById('btn-glossary-close').addEventListener('click', () => glossaryOverlayEl.classList.add('hidden'));
+glossaryOverlayEl.addEventListener('click', (e) => {
+  if (e.target === glossaryOverlayEl) glossaryOverlayEl.classList.add('hidden');
+});
+
 const btnToggleCustomizer = document.getElementById('btn-toggle-customizer');
 btnToggleCustomizer.addEventListener('click', () => {
   const collapsed = customizerEl.classList.toggle('collapsed');
@@ -447,7 +525,8 @@ function rosterCard(c) {
       </div>
       <div class="rc-blurb">${c.blurb}</div>
       <div class="rc-stats">HP ${s.hp} · Arm ${s.armor} · Spd ${s.speed.toFixed(1)}</div>
-      <div class="rc-attack">${ATK_TYPE_LABELS[a.type]} · ${SHAPE_LABELS[a.shape]}</div>
+      <div class="rc-attack" title="${keywordTip(a.type)}">${ATK_TYPE_LABELS[a.type]} · ${SHAPE_LABELS[a.shape]}</div>
+      <div class="rc-trait">Conf ${c.confidence ?? 0.5} · Stam ${(s.stamina && s.stamina.max) || CONFIG.stamina.max}</div>
       <div class="rc-pick">${selected ? 'Selected' : 'Add to party'}</div>
     </div>`;
 }
@@ -487,7 +566,11 @@ function hireCard(m) {
         <span class="th-name">${m.name}</span>
       </div>
       <div class="th-stats">HP ${m.stats.hp} · Arm ${m.stats.armor} · Spd ${m.stats.speed.toFixed(1)}</div>
-      <div class="th-attack">${ATK_TYPE_LABELS[m.attack.type]} · ${SHAPE_LABELS[m.attack.shape]}</div>
+      <div class="th-trait">Conf ${m.confidence ?? 0.5} · Stam ${(m.stats.stamina && m.stats.stamina.max) || CONFIG.stamina.max} · Regen ${(m.stats.stamina && m.stats.stamina.regen) || CONFIG.stamina.regen}</div>
+      <div class="th-attack" title="${keywordTip(m.attack.type)}">${ATK_TYPE_LABELS[m.attack.type] || m.attack.type} · ${SHAPE_LABELS[m.attack.shape] || m.attack.shape}</div>
+      ${(m.modifiers || []).length || (m.selfPreservation || []).length
+        ? `<div class="th-abilities">${modifierChips(m.modifiers)}${selfPreservationChips(m.selfPreservation)}</div>`
+        : ''}
       ${m._owned ? '<div class="th-buy">Owned</div>'
         : `<button class="th-buy" data-buy="${m.id}">Hire — 🪙 ${salary}</button>`}
     </div>`;
@@ -702,7 +785,7 @@ function updateTeamUi() {
     }
     el.root.classList.toggle('dead', !u.alive);
     el.hpfill.style.width = Math.round((u.hp / u.maxHp) * 100) + '%';
-    el.stamfill.style.width = Math.round((u.stamina / CONFIG.stamina.max) * 100) + '%';
+    el.stamfill.style.width = Math.round((u.stamina / u.staminaMax) * 100) + '%';
     el.stamfill.classList.toggle('sprinting', !!u.sprinting);
 
     // Confidence dot: green = bold, amber = nervous, red = shaken.
@@ -1201,7 +1284,8 @@ function renderRest() {
     el.innerHTML = `
       <div class="rc-name">${c.name}</div>
       <div class="rc-stats">HP ${c.stats.hp} · Arm ${c.stats.armor} · Spd ${c.stats.speed.toFixed(1)}</div>
-      <div class="rc-attack">${c.attack.type} · ${c.attack.shape}</div>
+      <div class="rc-trait">Conf ${c.confidence ?? 0.5} · Stam ${(c.stats.stamina && c.stats.stamina.max) || CONFIG.stamina.max} · Regen ${(c.stats.stamina && c.stats.stamina.regen) || CONFIG.stamina.regen}</div>
+      <div class="rc-attack" title="${keywordTip(c.attack.type)}">${ATK_TYPE_LABELS[c.attack.type] || c.attack.type} · ${SHAPE_LABELS[c.attack.shape] || c.attack.shape}</div>
       <div class="rc-cost" style="color:#fbbf24;font-weight:600;margin-top:auto;">Hire — 🪙 ${c.salary}</div>
     `;
     el.addEventListener('click', () => {
@@ -1267,7 +1351,8 @@ function renderShop() {
     el.innerHTML = `
       <div class="rc-name">${c.name}</div>
       <div class="rc-stats">HP ${c.stats.hp} · Arm ${c.stats.armor} · Spd ${c.stats.speed.toFixed(1)}</div>
-      <div class="rc-attack">${c.attack.type} · ${c.attack.shape}</div>
+      <div class="rc-trait">Conf ${c.confidence ?? 0.5} · Stam ${(c.stats.stamina && c.stats.stamina.max) || CONFIG.stamina.max} · Regen ${(c.stats.stamina && c.stats.stamina.regen) || CONFIG.stamina.regen}</div>
+      <div class="rc-attack" title="${keywordTip(c.attack.type)}">${ATK_TYPE_LABELS[c.attack.type] || c.attack.type} · ${SHAPE_LABELS[c.attack.shape] || c.attack.shape}</div>
       <div class="rc-cost" style="color:#fbbf24;font-weight:600;margin-top:auto;">Hire — 🪙 ${c.salary}</div>
     `;
     el.addEventListener('click', () => {

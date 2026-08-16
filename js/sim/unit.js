@@ -13,9 +13,6 @@ export class Unit {
     this.team = opts.team;          // 'player' | 'enemy'
     this.isBat = opts.team === 'enemy';
     this.personality = def.personality || 'stoic'; // drives flavor of banter lines
-    // Aggression is kept on the def as a starting-confidence bias only; the
-    // live behavior is driven by the single dynamic `confidence` value below.
-    this.aggression = def.aggression ?? 0.5; // 0..1 per-member caution: 0 = retreat, 1 = aggressive
     this.pos = { ...opts.pos };
     this.vel = { x: 0, y: 0 };
     this.knockback = { x: 0, y: 0 }; // impulse from being hit; decays each step
@@ -83,17 +80,27 @@ export class Unit {
 
     // Confidence: continuous 0..1 morale. Threats erode it, safety restores it,
     // and it scales how much danger the member tolerates before backing off.
-    // Starts from a base plus a personality bias so a cocky member is naturally
-    // bolder than a nervous one. Persists on the member def so it carries
-    // across rooms (a member that got beaten down stays shaken).
+    // The member's own `confidence` base (its composure) sets both the starting
+    // value and the recovery target, so a naturally brave member steadies high
+    // while a nervous one settles low. A small personality bias nudges it.
+    // Persists on the member def so it carries across rooms (a member that got
+    // beaten down stays shaken).
     const cf = CONFIG.confidence;
-    const bias = (cf.personalityBias[this.personality] || 0)
-      + (this.aggression - 0.5) * 2 * cf.aggressionBias; // aggression dial -> starting confidence
-    this.confidence = clamp(cf.start + bias, cf.min, cf.max);
+    this.baseConfidence = clamp(def.confidence ?? 0.5, cf.min, cf.max);
+    this.confidence = clamp(
+      this.baseConfidence + (cf.personalityBias[this.personality] || 0),
+      cf.min, cf.max
+    );
 
     // Stamina: powers dodges and sprints. Regenerates over time; spending it
     // is a tactical choice (dodge an incoming hit vs. sprint to escape/close).
-    this.stamina = CONFIG.stamina.max;
+    // A member can vary its pool size and regen rate via an optional
+    // `stamina: { max, regen }` stat, so an agile skirmisher can dodge far more
+    // often than a heavy brawler.
+    const stDef = (stats.stamina) || {};
+    this.staminaMax = stDef.max ?? CONFIG.stamina.max;
+    this.staminaRegen = stDef.regen ?? CONFIG.stamina.regen;
+    this.stamina = this.staminaMax;
     this.sprinting = false;   // currently sprinting (drains stamina, moves faster)
     this.dodgeTimer = 0;     // brief invulnerability window after a successful dodge
     this.windup = 0;         // enemy telegraph countdown before a hit lands (dodge window)
@@ -143,7 +150,9 @@ export class Unit {
     if (this.team === 'player') {
       const cf = CONFIG.confidence;
       const frac = dmg / this.maxHp;
-      const drop = cf.hitDrop * (0.25 + frac * 3);
+      // baseConfidence shapes *how fragile* a member is: a steady unit barely
+      // flinches, a nervous one is rattled hard by the same hit.
+      const drop = cf.hitDrop * (0.25 + frac * 3) * (1.5 - this.baseConfidence);
       this.confidence = clamp(this.confidence - drop, cf.min, cf.max);
     }
     if (this.hp <= 0) {

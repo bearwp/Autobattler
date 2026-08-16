@@ -21,7 +21,7 @@ export function startingHero() {
     modifiers: ['peel'],
     selfPreservation: [],
     target: { side: 'enemy', rule: 'closest' },
-    movement: 'advance', leader: true, personality: 'stoic', aggression: 0.9,
+    movement: 'advance', leader: true, personality: 'stoic', confidence: 0.8, stamina: { max: 140, regen: 8 },
     runs: 0, wins: 0,
   };
 }
@@ -98,17 +98,22 @@ export function rollTavernRecruits(count) {
     'Petra', 'Ronan', 'Sable', 'Talon', 'Una', 'Vance', 'Willa', 'Yuri', 'Zelda'];
   const colors = ['#f87171', '#fb923c', '#fbbf24', '#4ade80', '#22d3ee', '#a78bfa', '#f472b6', '#94a3b8'];
   const shapes = ['square', 'triangle', 'circle'];
-  const atkTypes = ['damage', 'damage', 'damage', 'heal', 'taunt', 'shield'];
+  const atkTypes = ['damage', 'damage', 'damage', 'damage', 'heal', 'taunt', 'shield', 'buff', 'mana', 'summon', 'push'];
   const atkShapes = ['rangeOneShot', 'rangeAoe', 'meleeOneShot', 'meleeCone', 'meleeAoe'];
   const rules = ['lowestHp', 'highestHp', 'closest', 'strongest', 'weakest', 'mostAtOnce', 'threatened'];
-  const modPool = ['taunt', 'lifesteal', 'pierce', 'slow', 'peel', 'evasive', 'burn', 'stun', 'push'];
+  const modPool = ['taunt', 'lifesteal', 'pierce', 'slow', 'peel', 'evasive', 'burn', 'stun', 'thorns', 'execute'];
+  const spPool = ['hide', 'seekHeal'];
   const personalities = ['stoic', 'cocky', 'cautious', 'cheerful', 'grumpy', 'nervous', 'chatty'];
 
   for (let i = 0; i < count; i++) {
     const type = atkTypes[Math.floor(Math.random() * atkTypes.length)];
     const shape = atkShapes[Math.floor(Math.random() * atkShapes.length)];
     const mods = [];
-    if (Math.random() < 0.5) mods.push(modPool[Math.floor(Math.random() * modPool.length)]);
+    // Usually one modifier, sometimes two, occasionally a self-preservation instinct.
+    if (Math.random() < 0.7) mods.push(modPool[Math.floor(Math.random() * modPool.length)]);
+    if (Math.random() < 0.3) mods.push(modPool[Math.floor(Math.random() * modPool.length)]);
+    const sp = Math.random() < 0.3 ? [spPool[Math.floor(Math.random() * spPool.length)]] : [];
+    const support = type === 'heal' || type === 'shield' || type === 'buff' || type === 'mana' || type === 'summon';
     const m = {
       id: 'rec' + Date.now().toString(36) + i,
       name: names[Math.floor(Math.random() * names.length)],
@@ -119,6 +124,7 @@ export function rollTavernRecruits(count) {
         armor: Math.floor(Math.random() * 9),
         speed: 2 + Math.random() * 2,
         size: 0.6 + Math.random() * 0.4,
+        ...(support ? { mana: { max: 100 + Math.floor(Math.random() * 40), cost: 20 + Math.floor(Math.random() * 15) } } : {}),
       },
       attack: {
         type,
@@ -127,10 +133,12 @@ export function rollTavernRecruits(count) {
         atk: 10 + Math.floor(Math.random() * 25),
       },
       modifiers: mods,
-      selfPreservation: [],
-      target: { side: (type === 'heal' || type === 'shield') ? 'ally' : 'enemy', rule: rules[Math.floor(Math.random() * rules.length)] },
+      selfPreservation: sp,
+      target: { side: (support && type !== 'taunt') ? 'ally' : 'enemy', rule: rules[Math.floor(Math.random() * rules.length)] },
       leader: false,
       personality: personalities[Math.floor(Math.random() * personalities.length)],
+      confidence: Math.round((0.2 + Math.random() * 0.7) * 100) / 100,
+      stamina: { max: 60 + Math.floor(Math.random() * 80), regen: 6 + Math.floor(Math.random() * 14) },
       runs: 0, wins: 0,
     };
     recruits.push(m);

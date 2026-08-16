@@ -148,7 +148,7 @@ export class Sim {
       const count = m.minPerFloor + Math.floor(Math.random() * (m.maxPerFloor - m.minPerFloor + 1));
       const floorNodes = [];
       for (let i = 0; i < count; i++) {
-        const type = this._randomNodeType();
+        const type = this._randomNodeType(f === 1);
         floorNodes.push(addNode(f, type));
       }
       // Connect every previous node to at least one node on this floor.
@@ -203,10 +203,10 @@ export class Sim {
     return { nodes, edges };
   }
 
-  _randomNodeType() {
+  _randomNodeType(isFirstFloor) {
     const r = Math.random();
     if (r < 0.4) return 'combat';
-    if (r < 0.58) return 'elite';
+    if (!isFirstFloor && r < 0.58) return 'elite';
     if (r < 0.72) return 'rest';
     if (r < 0.82) return 'treasure';
     if (r < 0.92) return 'shop';
@@ -277,15 +277,20 @@ export class Sim {
       'Petra', 'Ronan', 'Sable', 'Talon', 'Una', 'Vance', 'Willa', 'Yuri', 'Zelda'];
     const colors = ['#f87171', '#fb923c', '#fbbf24', '#4ade80', '#22d3ee', '#a78bfa', '#f472b6', '#94a3b8'];
     const shapes = ['square', 'triangle', 'circle'];
-    const atkTypes = ['damage', 'damage', 'damage', 'heal', 'taunt', 'shield'];
+    const atkTypes = ['damage', 'damage', 'damage', 'damage', 'heal', 'taunt', 'shield', 'buff', 'mana', 'summon', 'push'];
     const atkShapes = ['rangeOneShot', 'rangeAoe', 'meleeOneShot', 'meleeCone', 'meleeAoe'];
-    const rules = ['lowestHp', 'highestHp', 'closest', 'strongest', 'weakest', 'mostAtOnce', 'threatened'];    const modPool = ['taunt', 'lifesteal', 'pierce', 'slow', 'peel', 'evasive', 'burn', 'stun', 'push'];
+    const rules = ['lowestHp', 'highestHp', 'closest', 'strongest', 'weakest', 'mostAtOnce', 'threatened'];    const modPool = ['taunt', 'lifesteal', 'pierce', 'slow', 'peel', 'evasive', 'burn', 'stun', 'thorns', 'execute'];
+    const spPool = ['hide', 'seekHeal'];
     const personalities = ['stoic', 'cocky', 'cautious', 'cheerful', 'grumpy', 'nervous', 'chatty'];
 
     const type = atkTypes[Math.floor(Math.random() * atkTypes.length)];
     const shape = atkShapes[Math.floor(Math.random() * atkShapes.length)];
     const mods = [];
-    if (Math.random() < 0.5) mods.push(modPool[Math.floor(Math.random() * modPool.length)]);
+    // Usually one modifier, sometimes two, occasionally a self-preservation instinct.
+    if (Math.random() < 0.7) mods.push(modPool[Math.floor(Math.random() * modPool.length)]);
+    if (Math.random() < 0.3) mods.push(modPool[Math.floor(Math.random() * modPool.length)]);
+    const sp = Math.random() < 0.3 ? [spPool[Math.floor(Math.random() * spPool.length)]] : [];
+    const support = type === 'heal' || type === 'shield' || type === 'buff' || type === 'mana' || type === 'summon';
 
     return {
       id,
@@ -297,6 +302,7 @@ export class Sim {
         armor: Math.floor(Math.random() * 9),
         speed: 2 + Math.random() * 2,
         size: 0.6 + Math.random() * 0.4,
+        ...(support ? { mana: { max: 100 + Math.floor(Math.random() * 40), cost: 20 + Math.floor(Math.random() * 15) } } : {}),
       },
       attack: {
         type,
@@ -305,9 +311,15 @@ export class Sim {
         atk: 10 + Math.floor(Math.random() * 25),
       },
       modifiers: mods,
-      target: { side: (type === 'heal' || type === 'shield') ? 'ally' : 'enemy', rule: rules[Math.floor(Math.random() * rules.length)] },
+      selfPreservation: sp,
+      target: { side: (support && type !== 'taunt') ? 'ally' : 'enemy', rule: rules[Math.floor(Math.random() * rules.length)] },
       leader: false,
       personality: personalities[Math.floor(Math.random() * personalities.length)],
+      // Composure (base confidence) and stamina pool are per-member traits, so
+      // random recruits vary: a brave skirmisher with high regen, or a nervous
+      // tank with a deep but slow-refilling pool.
+      confidence: Math.round((0.2 + Math.random() * 0.7) * 100) / 100,
+      stamina: { max: 60 + Math.floor(Math.random() * 80), regen: 6 + Math.floor(Math.random() * 14) },
     };
   }
 
@@ -700,7 +712,7 @@ export class Sim {
         }
       }
       // Stamina regenerates over time.
-      if (u.team === 'player') u.stamina = Math.min(CONFIG.stamina.max, u.stamina + dt * CONFIG.stamina.regen);
+      if (u.team === 'player') u.stamina = Math.min(u.staminaMax, u.stamina + dt * u.staminaRegen);
       // Passive mana regen during combat so mana users (e.g. the healer)
       // can keep casting without needing to rest constantly.
       if (u.maxMana > 0) u.mana = Math.min(u.maxMana, u.mana + dt * CONFIG.combat.manaRegen);
@@ -1086,6 +1098,9 @@ export class Sim {
       target = this._healTarget(u, allies);
     } else if (u.attack.type === 'shield') {
       target = this._shieldTarget(u, allies);
+    } else if (u.attack.type === 'mana' || u.attack.type === 'buff') {
+      // Support units never buff themselves; pick a real ally to boost.
+      target = this._supportTarget(u, allies);
     } else if (side === 'enemy') {
       target = this._focusFireTarget(u, target, enemies, allies);
       // Leader's play: if the leader called a focus/backline target, prefer it
@@ -1143,11 +1158,20 @@ export class Sim {
     // recovers slowly during a fight the member is winning (landing hits and
     // scoring kills add to it directly via recordDeal / killGain).
     const cf = CONFIG.confidence;
+    // Confidence drifts back toward a shared neutral fighting morale (cf.base),
+    // not this member's baseConfidence. baseConfidence is not a ceiling here —
+    // it shapes *how fast* confidence recovers (and, via a factor below, how
+    // hard it is shaken). A steady member regains its nerve quickly; a fragile
+    // one recovers slowly but is never trapped: everyone can climb back to the
+    // same fighting morale, so even a nervous unit can rejoin the fight. The
+    // only cap is the global max, so a member can never be permanently stuck
+    // below the safety threshold.
+    const rateScale = cf.recoverScale * (0.5 + u.baseConfidence); // 0.5..1.5
     if (enemies.length === 0) {
-      u.confidence = clamp(u.confidence + cf.recoverRate * dt, cf.min, cf.max);
+      u.confidence = clamp(u.confidence + cf.recoverRate * rateScale * dt, cf.min, cf.max);
     } else if (u.hp / u.maxHp > 0.5) {
       // In a fight but healthy: steady morale, slower than full safety.
-      u.confidence = clamp(u.confidence + cf.recoverRate * 0.5 * dt, cf.min, cf.max);
+      u.confidence = clamp(u.confidence + cf.recoverRate * 0.5 * rateScale * dt, cf.min, cf.max);
     }
 
     // Pressure: nearby enemies, and especially ones actively targeting this
@@ -1182,7 +1206,9 @@ export class Sim {
     u.backup = { total: backup, parts: backupParts };
     pressure = Math.max(0, pressure - backup);
     if (pressure > 0) {
-      u.confidence = clamp(u.confidence - pressure * dt, cf.min, cf.max);
+      // Fragile members are more rattled by nearby pressure.
+      const frag = (1.5 - u.baseConfidence);
+      u.confidence = clamp(u.confidence - pressure * frag * dt, cf.min, cf.max);
     }
 
     // Occasional "thinking" line reflecting what the unit is currently doing.
@@ -1190,7 +1216,10 @@ export class Sim {
   }
 
   // Healers prefer the ally with the strongest bond, weighted against how
-  // hurt they are, so a bonded ally is favored over a stranger.
+  // hurt they are, so a bonded ally is favored over a stranger. Never targets
+  // self. If no ally needs healing, it still picks the nearest ally (rather
+  // than leaving the target as a fallback that could be itself), so a healer
+  // never tries to heal itself.
   _healTarget(u, allies) {
     let best = null, bestScore = -Infinity;
     for (const a of allies) {
@@ -1200,7 +1229,16 @@ export class Sim {
       const score = missing + this._getBond(u, a) * CONFIG.synergy.healBiasFactor;
       if (score > bestScore) { bestScore = score; best = a; }
     }
-    return best;
+    if (best) return best;
+    // No one hurt: fall back to the nearest non-self ally so we never point at
+    // ourselves.
+    let nearest = null, bestD = Infinity;
+    for (const a of allies) {
+      if (a === u || !a.alive) continue;
+      const d = dist(u.pos, a.pos);
+      if (d < bestD) { bestD = d; nearest = a; }
+    }
+    return nearest;
   }
 
   // Shielders protect the ally currently under the most threat, so the
@@ -1222,6 +1260,38 @@ export class Sim {
       if (score > bestScore) { bestScore = score; best = a; }
     }
     return best;
+  }
+
+  // Buff/mana support: pick an ally to boost. Never self — a support unit
+  // empowers its teammates, not itself. Buffs go to the strongest attacker;
+  // mana goes to the ally with the most mana to refill. Falls back to the
+  // nearest healthy ally.
+  _supportTarget(u, allies) {
+    const type = u.attack.type;
+    let best = null, bestScore = -Infinity;
+    for (const a of allies) {
+      if (a === u || !a.alive) continue;
+      let score;
+      if (type === 'buff') {
+        // Buff the highest-damage attacker (excluding minions/summons).
+        if (a.def.kind === 'minion') continue;
+        score = (a.def.attack ? a.def.attack.atk : 0) + this._getBond(u, a) * CONFIG.synergy.healBiasFactor;
+      } else {
+        // Mana: refill the ally that needs it most (has a pool and is low).
+        if (a.maxMana <= 0) continue;
+        score = (a.maxMana - a.mana) + this._getBond(u, a) * CONFIG.synergy.healBiasFactor;
+      }
+      if (score > bestScore) { bestScore = score; best = a; }
+    }
+    if (best) return best;
+    // Fallback: nearest alive ally that isn't self.
+    let nearest = null, bestD = Infinity;
+    for (const a of allies) {
+      if (a === u || !a.alive) continue;
+      const d = dist(u.pos, a.pos);
+      if (d < bestD) { bestD = d; nearest = a; }
+    }
+    return nearest;
   }
 
   // Raise a disposable minion near the summoner. It rushes the nearest enemy
@@ -1384,6 +1454,19 @@ export class Sim {
     const sp = u.selfPreservation;
     if (sp.length === 0) return;
     const t = CONFIG.team;
+    // While fleeing/hiding the member still fights anything in reach, so pick
+    // a target by its own rule (enemy for attackers, ally for healers). Ally
+    // support types never pick themselves.
+    const side = u.targetRule && u.targetRule.side;
+    const type = u.attack.type;
+    let target;
+    if (type === 'heal') target = this._healTarget(u, allies);
+    else if (type === 'shield') target = this._shieldTarget(u, allies);
+    else if (type === 'mana' || type === 'buff') target = this._supportTarget(u, allies);
+    else {
+      const candidates = side === 'ally' ? allies : enemies;
+      target = pickTarget(u, candidates, u.attack.range);
+    }
 
     // Seek heal: run to the healer while badly hurt.
     if (sp.includes('seekHeal')) {
@@ -1437,9 +1520,9 @@ export class Sim {
   _seekSafety(u, target, enemies, allies, dt) {
     const cf = CONFIG.confidence;
     // A shaken member gives up sooner, a confident one keeps fighting. The
-    // per-member difference now comes purely from the dynamic confidence
-    // value (aggression was folded into its starting value), so the seek-
-    // safety trigger is simply "confidence below the safety threshold."
+    // per-member difference comes purely from the dynamic confidence value
+    // (each member has its own composure base), so the seek-safety trigger is
+    // simply "confidence below the safety threshold."
     const effThreshold = cf.safetyThreshold;
     const active = u.seekingSafety || u.confidence < effThreshold;
     if (!active || u.confidence >= effThreshold + cf.safetyHysteresis) {
@@ -1449,8 +1532,12 @@ export class Sim {
     u.seekingSafety = true;
 
     // Confidence steadies over time while fleeing, so a shaken unit
-    // gradually regains its nerve instead of cowering forever.
-    u.confidence = clamp(u.confidence + cf.safetyRecover * dt, cf.min, cf.max);
+    // gradually regains its nerve instead of cowering forever. There is no
+    // cap at baseConfidence here: everyone can climb back out of the shaken
+    // band (a nervous unit just recovers slower via its baseConfidence-scaled
+    // rate), so no member is ever permanently stuck in seek-safety.
+    const rateScale = cf.recoverScale * (0.5 + u.baseConfidence);
+    u.confidence = clamp(u.confidence + cf.safetyRecover * rateScale * dt, cf.min, cf.max);
 
     // If an enemy is in attack range, attack it — but keep fleeing, don't
     // move toward it. _resolveAttacks fires the attack; the retreat below
@@ -1686,7 +1773,12 @@ export class Sim {
 
     // Support goals: position near the ally to heal/shield/buff.
     if (type === 'heal' || type === 'shield' || type === 'buff' || type === 'mana') {
-      const ally = target && target.alive ? target : this._healTarget(u, allies);
+      // Never target self: a support unit empowers a teammate, not itself.
+      const ally = (target && target.alive && target !== u)
+        ? target
+        : (type === 'heal' ? this._healTarget(u, allies)
+          : type === 'shield' ? this._shieldTarget(u, allies)
+          : this._supportTarget(u, allies));
       if (ally) {
         // Stand just inside attack range of the ally so the cast lands.
         const to = sub(ally.pos, u.pos);
@@ -1803,6 +1895,11 @@ export class Sim {
   }
 
   _resolveAttacks(u, target, enemies, allies) {
+    // With no enemies left, the fight is decided: units stop spending mana or
+    // committing abilities so they don't waste casts on an already-won room.
+    const aliveEnemies = enemies.filter(e => e.alive);
+    if (aliveEnemies.length === 0) return;
+
     // Primary attack (if a valid target is in range).
     if (target && target.alive && dist(u.pos, target.pos) <= u.attack.range) {
       this._doPrimaryAttack(u, target, enemies, allies);
@@ -1853,6 +1950,11 @@ export class Sim {
         if (u.tauntCooldown > 0) break;
         const radius = atk.range;
         const refresh = CONFIG.threat.tauntRefresh;
+        // A taunt is a threatening slam: it yanks aggro AND deals damage to
+        // everyone in reach, so a pure taunt-tank can still whittle down the
+        // swarm instead of stalling forever against ranged enemies that kite
+        // out of melee reach. It always slams when it swings, even if no aggro
+        // needs refreshing, so a taunt primary stays a real weapon.
         let shouldTaunt = false;
         for (const e of enemies) {
           if (dist(u.pos, e.pos) > radius) continue;
@@ -1863,14 +1965,22 @@ export class Sim {
           const expiring = e.taunted && e.tauntTimer <= refresh;
           if (leaking || expiring) { shouldTaunt = true; break; }
         }
-        if (!shouldTaunt) break;
-        u.tauntCooldown = CONFIG.threat.tauntCooldown;
+        if (shouldTaunt) u.tauntCooldown = CONFIG.threat.tauntCooldown;
         let hit = false;
+        const dmg = atk.atk;
         for (const e of enemies) {
           if (dist(u.pos, e.pos) <= radius) {
+            const dealt = e.takeDamage(dmg);
+            u.recordDeal(e.def.kind, dealt);
             e.addThreat(u, CONFIG.threat.tauntThreat);
             e.taunted = true;
             e.tauntTimer = CONFIG.threat.tauntDuration;
+            this._knockback(e, u.pos, CONFIG.combat.knockback);
+            this.effects.push({
+              type: 'attack', from: { ...u.pos }, to: { ...e.pos },
+              color: u.team === 'player' ? '#fbbf24' : '#f87171', life: 0.15,
+              dmg: dealt, max: 0.15,
+            });
             hit = true;
           }
         }
@@ -1962,6 +2072,28 @@ export class Sim {
         });
         break;
       }
+      case 'push': {
+        // Knock the target and any nearby enemies far away from the caster.
+        // A strong, short-lived impulse that scatters the swarm. This is a
+        // standalone primary attack: it displaces enemies but deals no damage.
+        const radius = atk.range;
+        const strength = CONFIG.combat.knockback * 2.2;
+        let hit = false;
+        for (const e of enemies) {
+          if (!e.alive) continue;
+          if (dist(u.pos, e.pos) <= radius) {
+            this._knockback(e, u.pos, strength);
+            hit = true;
+          }
+        }
+        if (hit) {
+          this.effects.push({
+            type: 'push', pos: { ...u.pos }, radius, life: 0.3,
+            mag: strength, max: 0.3,
+          });
+        }
+        break;
+      }
       case 'damage':
       default: {
         this._applyDamageShape(u, target, enemies, atk);
@@ -2045,27 +2177,6 @@ export class Sim {
         case 'stun': {
           // Immobilize the target briefly so it can't move or attack.
           target.stunTimer = 1.2;
-          break;
-        }
-        case 'push': {
-          // Knock the target and any nearby enemies far away from the caster.
-          // A strong, short-lived impulse that scatters the swarm.
-          const radius = atk.range;
-          const strength = CONFIG.combat.knockback * 2.2;
-          let hit = false;
-          for (const e of enemies) {
-            if (!e.alive) continue;
-            if (dist(u.pos, e.pos) <= radius) {
-              this._knockback(e, u.pos, strength);
-              hit = true;
-            }
-          }
-          if (hit) {
-          this.effects.push({
-          type: 'push', pos: { ...u.pos }, radius, life: 0.3,
-          mag: strength, max: 0.3,
-          });
-          }
           break;
         }
         case 'thorns': {
@@ -2293,7 +2404,7 @@ export class Sim {
     // Only dodge hits that would hurt enough to justify the stamina cost.
     if (incomingDmg < st.dodgeMinDmg) return false;
     // Never spend below the reserve floor: keep enough to sprint to safety.
-    if (u.stamina - st.dodgeCost < st.max * st.reserveFrac) return false;
+    if (u.stamina - st.dodgeCost < u.staminaMax * st.reserveFrac) return false;
     if (u.dodgeTimer > 0) return false;
     u.stamina -= st.dodgeCost;
     u.dodgeTimer = st.dodgeWindow;
@@ -2323,6 +2434,9 @@ export class Sim {
   }
 
   // Spitter: ranged. Keeps distance from its target and fires from afar.
+  // A taunted spitter breaks that rule: it is forced onto its taunter and
+  // charges in so the tank can actually reach it, otherwise a slow melee
+  // taunt-tank would endlessly chase a kiting ranged enemy it can't catch.
   _updateSpitter(u, dt) {
     const enemies = this.playerUnits.filter(e => e.alive);
     if (enemies.length === 0) { u.vel = { x: 0, y: 0 }; return; }
@@ -2331,7 +2445,9 @@ export class Sim {
     const d = dist(u.pos, target.pos);
     const desired = u.def.range * 0.7; // preferred standoff distance
     let steer;
-    if (d > desired + 0.5) {
+    if (u.taunted) {
+      steer = norm(sub(target.pos, u.pos)); // charge the taunter
+    } else if (d > desired + 0.5) {
       steer = norm(sub(target.pos, u.pos));          // close in
     } else if (d < desired - 0.5) {
       steer = norm(sub(u.pos, target.pos));          // back off
@@ -2344,7 +2460,7 @@ export class Sim {
 
     if (target && d <= u.def.range) {
       if (u.attackTimer <= 0) {
-        u.attackTimer = CONFIG.combat.attackCooldown;
+        u.attackTimer = u.def.attackCooldown || CONFIG.combat.attackCooldown;
         u.target = target;
         this._startEnemyWindup(u, target);
       }
@@ -2560,7 +2676,7 @@ export class Sim {
     const st = CONFIG.stamina;
     // Stop at the reserve floor, not at zero, so a member always keeps a
     // little stamina in the tank.
-    const floor = st.max * st.reserveFrac;
+    const floor = u.staminaMax * st.reserveFrac;
     if (u.stamina <= floor) {
       u.sprinting = false;
       // Out of sprint stamina: still move at normal speed in the given

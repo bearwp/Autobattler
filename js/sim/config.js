@@ -5,7 +5,7 @@
 // These are the options the customizer offers. The sim reads member bundles
 // (see `members` below) and behaves generically; there are no fixed classes.
 
-export const ATTACK_TYPES = ['damage', 'heal', 'taunt', 'shield', 'buff', 'mana', 'summon'];
+export const ATTACK_TYPES = ['damage', 'heal', 'taunt', 'shield', 'buff', 'mana', 'summon', 'push'];
 
 export const TARGET_RULES = [
   'lowestHp', 'highestHp', 'closest', 'strongest', 'weakest', 'mostAtOnce', 'threatened',
@@ -28,7 +28,6 @@ export const MODIFIERS = [
   { id: 'evasive',   label: 'Evasive',   desc: 'Back away from whoever is targeting you' },
   { id: 'burn',      label: 'Burn',      desc: 'Ignite the target, dealing damage over time' },
   { id: 'stun',      label: 'Stun',       desc: 'Briefly immobilize the target' },
-  { id: 'push',      label: 'Push',       desc: 'Knock the target and nearby enemies far away' },
   { id: 'thorns',    label: 'Thorns',     desc: 'Reflect a portion of melee damage back at attackers' },
   { id: 'execute',   label: 'Execute',    desc: 'Deal bonus damage to enemies below half health' },
 ];
@@ -82,7 +81,7 @@ export const CONFIG = {
       selfPreservation: [],
       target: { side: 'enemy', rule: 'closest' },
       movement: 'advance', leader: true, personality: 'stoic',
-      aggression: 0.9,
+      confidence: 0.8, stamina: { max: 140, regen: 8 },
     },
     {
       id: 'm2', name: 'Soldier', color: '#ef4444', shape: 'square',
@@ -92,7 +91,7 @@ export const CONFIG = {
       selfPreservation: [],
       target: { side: 'enemy', rule: 'closest' },
       movement: 'charge', leader: false, personality: 'cocky',
-      aggression: 0.7,
+      confidence: 0.7,
     },
     {
       id: 'm3', name: 'Archer', color: '#22c55e', shape: 'triangle',
@@ -102,7 +101,7 @@ export const CONFIG = {
       selfPreservation: ['hide'],
       target: { side: 'enemy', rule: 'lowestHp' },
       movement: 'kite', leader: false, personality: 'cautious',
-      aggression: 0.3,
+      confidence: 0.45, stamina: { max: 100, regen: 18 },
     },
     {
       id: 'm4', name: 'Healer', color: '#f8fafc', shape: 'circle',
@@ -112,7 +111,7 @@ export const CONFIG = {
       selfPreservation: ['hide'],
       target: { side: 'ally', rule: 'lowestHp' },
       movement: 'keepDistance', leader: false, personality: 'cheerful',
-      aggression: 0.4,
+      confidence: 0.5,
     },
   ],
 
@@ -129,7 +128,7 @@ export const CONFIG = {
       modifiers: ['peel'],
       selfPreservation: [],
       target: { side: 'enemy', rule: 'closest' },
-      movement: 'advance', leader: true, personality: 'stoic', aggression: 0.9,
+      movement: 'advance', leader: true, personality: 'stoic', confidence: 0.8, stamina: { max: 140, regen: 8 },
     },
     {
       id: 'r-soldier', name: 'Vanguard', role: 'Bruiser', color: '#ef4444', shape: 'square',
@@ -139,7 +138,7 @@ export const CONFIG = {
       modifiers: ['lifesteal'],
       selfPreservation: [],
       target: { side: 'enemy', rule: 'closest' },
-      movement: 'charge', leader: false, personality: 'cocky', aggression: 0.7,
+      movement: 'charge', leader: false, personality: 'cocky', confidence: 0.7,
     },
     {
       id: 'r-archer', name: 'Ranger', role: 'Ranged', color: '#22c55e', shape: 'triangle',
@@ -149,7 +148,7 @@ export const CONFIG = {
       modifiers: ['pierce'],
       selfPreservation: ['hide'],
       target: { side: 'enemy', rule: 'lowestHp' },
-      movement: 'kite', leader: false, personality: 'cautious', aggression: 0.3,
+      movement: 'kite', leader: false, personality: 'cautious', confidence: 0.45, stamina: { max: 100, regen: 18 },
     },
     {
       id: 'r-healer', name: 'Cleric', role: 'Support', color: '#f8fafc', shape: 'circle',
@@ -159,7 +158,7 @@ export const CONFIG = {
       modifiers: [],
       selfPreservation: ['hide'],
       target: { side: 'ally', rule: 'lowestHp' },
-      movement: 'keepDistance', leader: false, personality: 'cheerful', aggression: 0.4,
+      movement: 'keepDistance', leader: false, personality: 'cheerful', confidence: 0.5,
     },
     {
       id: 'r-mage', name: 'Pyromancer', role: 'AOE', color: '#f97316', shape: 'circle',
@@ -169,7 +168,7 @@ export const CONFIG = {
       modifiers: ['slow'],
       selfPreservation: ['hide'],
       target: { side: 'enemy', rule: 'mostAtOnce' },
-      movement: 'keepDistance', leader: false, personality: 'nervous', aggression: 0.3,
+      movement: 'keepDistance', leader: false, personality: 'nervous', confidence: 0.4,
     },
     {
       id: 'r-assassin', name: 'Shadow', role: 'Assassin', color: '#a78bfa', shape: 'triangle',
@@ -179,7 +178,7 @@ export const CONFIG = {
       modifiers: ['evasive'],
       selfPreservation: ['hide'],
       target: { side: 'enemy', rule: 'weakest' },
-      movement: 'hunt', leader: false, personality: 'grumpy', aggression: 0.8,
+      movement: 'hunt', leader: false, personality: 'grumpy', confidence: 0.6, stamina: { max: 90, regen: 20 },
     },
     {
       id: 'r-guardian', name: 'Warden', role: 'Guard', color: '#22d3ee', shape: 'square',
@@ -189,7 +188,7 @@ export const CONFIG = {
       modifiers: ['taunt'],
       selfPreservation: [],
       target: { side: 'enemy', rule: 'threatened' },
-      movement: 'guard', leader: false, personality: 'stoic', aggression: 0.6,
+      movement: 'guard', leader: false, personality: 'stoic', confidence: 0.7,
     },
     {
       id: 'r-berserker', name: 'Berserker', role: 'Duelist', color: '#f472b6', shape: 'square',
@@ -199,17 +198,17 @@ export const CONFIG = {
       modifiers: ['lifesteal'],
       selfPreservation: [],
       target: { side: 'enemy', rule: 'strongest' },
-      movement: 'flank', leader: false, personality: 'cocky', aggression: 0.9,
+      movement: 'flank', leader: false, personality: 'cocky', confidence: 0.85, stamina: { max: 80, regen: 16 },
     },
     {
       id: 'r-stormcaller', name: 'Stormcaller', role: 'Disruptor', color: '#22d3ee', shape: 'circle',
       blurb: 'Blasts a shockwave that knocks enemies far away, scattering the swarm and buying the team space.',
       stats: { hp: 80, armor: 1, speed: 3.0, size: 0.6 },
-      attack: { type: 'damage', shape: 'rangeAoe', range: 5.0, atk: 12 },
-      modifiers: ['push'],
+      attack: { type: 'push', shape: 'rangeAoe', range: 5.0, atk: 12 },
+      modifiers: [],
       selfPreservation: ['hide'],
       target: { side: 'enemy', rule: 'mostAtOnce' },
-      movement: 'keepDistance', leader: false, personality: 'cautious', aggression: 0.4,
+      movement: 'keepDistance', leader: false, personality: 'cautious', confidence: 0.45,
     },
     {
       id: 'r-sentinel', name: 'Sentinel', role: 'Protector', color: '#60a5fa', shape: 'square',
@@ -219,7 +218,7 @@ export const CONFIG = {
       modifiers: ['peel'],
       selfPreservation: [],
       target: { side: 'ally', rule: 'threatened' },
-      movement: 'guard', leader: false, personality: 'stoic', aggression: 0.5,
+      movement: 'guard', leader: false, personality: 'stoic', confidence: 0.65,
     },
     {
       id: 'r-hexer', name: 'Hexer', role: 'Debuffer', color: '#c084fc', shape: 'circle',
@@ -229,7 +228,7 @@ export const CONFIG = {
       modifiers: ['stun', 'slow'],
       selfPreservation: ['hide'],
       target: { side: 'enemy', rule: 'strongest' },
-      movement: 'keepDistance', leader: false, personality: 'grumpy', aggression: 0.3,
+      movement: 'keepDistance', leader: false, personality: 'grumpy', confidence: 0.4,
     },
     {
       id: 'r-crusader', name: 'Crusader', role: 'Off-tank', color: '#fbbf24', shape: 'square',
@@ -239,7 +238,7 @@ export const CONFIG = {
       modifiers: ['taunt'],
       selfPreservation: [],
       target: { side: 'enemy', rule: 'mostAtOnce' },
-      movement: 'advance', leader: false, personality: 'stoic', aggression: 0.8,
+      movement: 'advance', leader: false, personality: 'stoic', confidence: 0.75, stamina: { max: 130, regen: 8 },
     },
     {
       id: 'r-warhorn', name: 'Warhorn', role: 'Buffer', color: '#fde047', shape: 'circle',
@@ -249,7 +248,7 @@ export const CONFIG = {
       modifiers: [],
       selfPreservation: ['hide'],
       target: { side: 'ally', rule: 'strongest' },
-      movement: 'keepDistance', leader: false, personality: 'cheerful', aggression: 0.4,
+      movement: 'keepDistance', leader: false, personality: 'cheerful', confidence: 0.5,
     },
     {
       id: 'r-necro', name: 'Necromancer', role: 'Summoner', color: '#a3e635', shape: 'circle',
@@ -259,7 +258,7 @@ export const CONFIG = {
       modifiers: [],
       selfPreservation: ['hide'],
       target: { side: 'enemy', rule: 'closest' },
-      movement: 'keepDistance', leader: false, personality: 'nervous', aggression: 0.3,
+      movement: 'keepDistance', leader: false, personality: 'nervous', confidence: 0.35,
     },
     {
       id: 'r-executioner', name: 'Executioner', role: 'Finisher', color: '#f87171', shape: 'triangle',
@@ -269,7 +268,7 @@ export const CONFIG = {
       modifiers: ['execute'],
       selfPreservation: [],
       target: { side: 'enemy', rule: 'highestHp' },
-      movement: 'hunt', leader: false, personality: 'cocky', aggression: 0.8,
+      movement: 'hunt', leader: false, personality: 'cocky', confidence: 0.7, stamina: { max: 100, regen: 15 },
     },
     {
       id: 'r-thorn', name: 'Thorn', role: 'Reflect tank', color: '#4ade80', shape: 'square',
@@ -279,7 +278,7 @@ export const CONFIG = {
       modifiers: ['thorns'],
       selfPreservation: [],
       target: { side: 'enemy', rule: 'closest' },
-      movement: 'advance', leader: false, personality: 'stoic', aggression: 0.7,
+      movement: 'advance', leader: false, personality: 'stoic', confidence: 0.8, stamina: { max: 150, regen: 6 },
     },
     {
       id: 'r-channeler', name: 'Channeler', role: 'Mana battery', color: '#38bdf8', shape: 'circle',
@@ -289,14 +288,14 @@ export const CONFIG = {
       modifiers: [],
       selfPreservation: ['hide'],
       target: { side: 'ally', rule: 'strongest' },
-      movement: 'keepDistance', leader: false, personality: 'cheerful', aggression: 0.3,
+      movement: 'keepDistance', leader: false, personality: 'cheerful', confidence: 0.4,
     },
   ],
 
   // Universal secondary attack: every member has a short melee attack so a
   // healer/taunt/ranged unit can still defend itself up close.
   secondary: {
-    range: 1.0,             // short melee reach
+    range: 1.6,             // short melee reach
     atk: 6,                 // damage dealt by the secondary attack
     cooldown: 0.8,
   },
@@ -334,7 +333,7 @@ export const CONFIG = {
     spitter: {
       kind: 'spitter', hp: 30, atk: 12, range: 6.0, speed: 3.4, armor: 0,
       color: '#22d3ee', shape: 'circle', size: 0.4,
-      count: 4, countPerLevel: 1,
+      count: 4, countPerLevel: 1, attackCooldown: 1.6,
     },
     wisp: {
       kind: 'wisp', hp: 18, atk: 12, range: 0.8, speed: 6.4, armor: 0,
@@ -499,7 +498,7 @@ export const CONFIG = {
     survivalHysteresis: 0.5, // dead-zone so survival doesn't oscillate
     // Goal layer: how close to the goal the member wants to be.
     goalRange: 0.5,          // stop easing within this of the goal point
-    // Commitment layer: how confidence and durability map to aggression.
+    // Commitment layer: how confidence and durability map to forward drive.
     // commitment = clamp(conf * confWeight + dur * durWeight + backup, 0..1)
     confWeight: 1.0,         // how strongly confidence drives commitment
     durWeight: 0.6,          // how strongly durability drives commitment
@@ -551,18 +550,20 @@ export const CONFIG = {
   // rule. Personality biases the starting value so a cocky member is naturally
   // bolder than a nervous one.
   confidence: {
-    start: 0.5,             // base starting confidence
-    // Per-member starting bias. Personality biases the value, and the (now
-    // static) aggression dial folds in as an additive offset so an
-    // aggressive member simply starts bolder. There is no separate combat
-    // aggression axis anymore: one continuous confidence value drives
-    // bravery, and it evolves dynamically as the fight plays out.
+    // Each member has its own base `confidence` (its composure, 0..1). It sets
+    // the starting value and shapes how the value *changes*: a steady member
+    // recovers nerve quickly and barely flinches when hit, a nervous one
+    // recovers slowly and is easily rattled. Everyone drifts back to the same
+    // shared fighting morale, so no member is ever permanently stuck below the
+    // safety threshold. A small personality bias nudges the starting value.
+    // There is no separate aggression axis anymore: one continuous confidence
+    // value drives bravery, and it evolves dynamically as the fight plays out.
     personalityBias: {      // additive starting offset per personality
       cocky: 0.3, cheerful: 0.2, stoic: 0.1, cautious: -0.1, grumpy: -0.1, nervous: -0.3, chatty: 0.1,
     },
-    aggressionBias: 0.4,    // aggression dial scales this: 0 -> -0.2, 1 -> +0.2 starting confidence
     hitDrop: 0.08,          // confidence lost each time the member is hit
     avoidDrop: 0.12,        // confidence lost each time the member backs off (retreat/hold)
+    recoverScale: 1.0,      // base multiplier; recovery is further scaled by (0.5 + baseConfidence)
     recoverRate: 0.06,      // confidence gained per second while safe
     attackGain: 0.02,       // confidence gained each time the member lands a hit
     killGain: 0.15,         // confidence gained each time the member kills an enemy
