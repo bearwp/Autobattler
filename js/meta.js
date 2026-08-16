@@ -134,7 +134,7 @@ export function rollTavernRecruits(count) {
       },
       modifiers: mods,
       selfPreservation: sp,
-      target: { side: (support && type !== 'taunt') ? 'ally' : 'enemy', rule: rules[Math.floor(Math.random() * rules.length)] },
+      target: { side: (support && type !== 'taunt' && type !== 'summon') ? 'ally' : 'enemy', rule: rules[Math.floor(Math.random() * rules.length)] },
       leader: false,
       personality: personalities[Math.floor(Math.random() * personalities.length)],
       confidence: Math.round((0.2 + Math.random() * 0.7) * 100) / 100,
