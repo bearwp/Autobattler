@@ -125,6 +125,13 @@ function memberCard(m) {
           <label class="leader-toggle"><input class="mleaderchk" type="checkbox" ${m.leader ? 'checked' : ''} /> Leader</label>
         </div>
 
+        <div class="chip aggro" title="Caution: how readily this member backs off from danger">
+          <span class="chip-emoji">⚖</span>
+          <span class="chip-num">Retreat</span>
+          <input class="maggression" type="range" min="0" max="1" step="0.05" value="${m.aggression ?? 0.5}" />
+          <span class="chip-num">Aggressive</span>
+        </div>
+
         <div class="mod-row">
           <span class="mod-chips">${modifierChips(mods)}</span>
           <button class="add-mod" title="Add modifier">+</button>
@@ -185,6 +192,7 @@ function readMembers() {
       movement: str('.mmove'),
       leader: card.querySelector('.mleaderchk').checked,
       personality: str('.mpersonality') || 'stoic',
+      aggression: parseFloat(card.querySelector('.maggression').value) || 0.5,
     });
   });
   return members;
@@ -211,6 +219,7 @@ function addMember() {
     movement: 'advance',
     leader: false,
     personality: 'stoic',
+    aggression: 0.5,
   };
   sim.members.push(m);
   const div = document.createElement('div');
@@ -349,6 +358,22 @@ customizerEl.addEventListener('change', (e) => {
   }
 });
 
+// Live-update aggression as the slider is dragged: write it straight back to
+// the member def and any live unit so the change takes effect immediately
+// instead of waiting for Apply.
+customizerEl.addEventListener('input', (e) => {
+  if (!e.target.matches('.maggression')) return;
+  const card = e.target.closest('.mcard');
+  if (!card) return;
+  const id = card.dataset.id;
+  const val = parseFloat(e.target.value) || 0.5;
+  const member = sim.members.find(m => m.id === id);
+  if (member) member.aggression = val;
+  for (const u of sim.playerUnits) {
+    if (u.def.id === id) u.aggression = val;
+  }
+});
+
 document.getElementById('btn-add-member').addEventListener('click', addMember);
 document.getElementById('btn-apply').addEventListener('click', applyMembers);
 
@@ -372,12 +397,14 @@ function buildTeamUi() {
         <div class="name">${m.name}</div>
         <div class="ability">${m.attack.type} · ${m.attack.shape} · ${m.movement}</div>
         <div class="hpbar"><div class="hpfill"></div></div>
+        <div class="stambar"><div class="stamfill"></div></div>
       </div>
     `;
     teamUiEl.appendChild(root);
     memberEls.set(m.id, {
       root,
       hpfill: root.querySelector('.hpfill'),
+      stamfill: root.querySelector('.stamfill'),
     });
   }
 }
@@ -441,15 +468,21 @@ function updateTeamUi() {
     if (sim.deadIds.has(m.id)) {
       el.root.classList.add('dead');
       el.hpfill.style.width = '0%';
+      el.stamfill.style.width = '0%';
+      el.stamfill.classList.remove('sprinting');
       continue;
     }
     if (!u) {
       el.root.classList.remove('dead');
       el.hpfill.style.width = '100%';
+      el.stamfill.style.width = '100%';
+      el.stamfill.classList.remove('sprinting');
       continue;
     }
     el.root.classList.toggle('dead', !u.alive);
     el.hpfill.style.width = Math.round((u.hp / u.maxHp) * 100) + '%';
+    el.stamfill.style.width = Math.round((u.stamina / CONFIG.stamina.max) * 100) + '%';
+    el.stamfill.classList.toggle('sprinting', !!u.sprinting);
   }
 }
 
@@ -503,6 +536,24 @@ debugPanelEl.querySelectorAll('.dbg-tab').forEach(tab => {
   });
 });
 
+// Overlay layer toggles (pills). Each maps to a renderer.show* flag; the
+// pill's .on class mirrors the flag so the UI stays in sync.
+const LAYER_FLAG = {
+  aggro: 'showAggro',
+  confidence: 'showConfidence',
+  backup: 'showBackup',
+  safety: 'showSafety',
+  targets: 'showTargets',
+  intent: 'showIntent',
+};
+debugPanelEl.querySelectorAll('.dbg-pill').forEach(pill => {
+  pill.addEventListener('click', () => {
+    const flag = LAYER_FLAG[pill.dataset.layer];
+    renderer[flag] = !renderer[flag];
+    pill.classList.toggle('on', renderer[flag]);
+  });
+});
+
 // Pause/resume (button + P key stay in sync).
 function setPaused(paused) {
   sim.paused = paused;
@@ -539,7 +590,7 @@ function renderDebugUnits() {
   let html = '';
 
   if (team.length) {
-    html += '<div class="dbg-section">Team</div>';
+    html += `<div class="dbg-section">Team — morale ${Math.round(sim.morale * 100)}%</div>`;
     for (const u of team) html += unitCard(u);
   }
   if (enemies.length) {
@@ -568,18 +619,70 @@ function unitCard(u) {
   const targetName = u.target && u.target.alive ? (u.target.def.name || 'target') : '—';
   const goal = u.path && u.path.length ? u.path[u.path.length - 1] : null;
   const goalTxt = goal ? `(${goal.x.toFixed(1)}, ${goal.y.toFixed(1)})` : '—';
-  // Intel avoid decision, if this member made one this frame.
-  let avoidHtml = '';
-  if (u.avoid) {
-    const a = u.avoid;
-    const action = a.action === 'retreat' ? 'Retreat' : 'Hold';
-    const flags = [
-      a.engaged ? 'engaged' : null,
-      a.outnumbered ? 'outnumbered' : null,
-      a.canEscape ? 'can-escape' : 'can\'t-escape',
-    ].filter(Boolean).join(' ');
-    avoidHtml = `<div class="dbg-row"><b>Avoid</b><span class="dbg-intent">${action} · danger ${a.danger.toFixed(0)} · ${flags} · ${a.reason}</span></div>`;
+
+  // --- Combat state ---
+  // Threat: which enemies are focusing this unit (the data behind the Aggro
+  // overlay). Sorted highest first so the biggest threat is always visible.
+  let threatHtml = '';
+  if (u.threat && u.threat.size) {
+    const rows = [...u.threat.entries()]
+      .map(([id, v]) => ({ id, v }))
+      .sort((a, b) => b.v - a.v)
+      .slice(0, 3)
+      .map(({ id, v }) => {
+        const e = sim.units.find(x => x.id === id);
+        const name = e ? (e.def.name || 'enemy') : '?';
+        return `${name} ${v.toFixed(0)}`;
+      })
+      .join(' · ');
+    threatHtml = `<div class="dbg-row"><b>Threat</b><span class="dbg-aggro">${rows}</span></div>`;
   }
+  // Target score breakdown: why this target was picked (player only).
+  let scoreHtml = '';
+  if (u.team === 'player' && u.targetScore && u.target && u.target.alive) {
+    const s = u.targetScore;
+    const terms = [
+      s.bond > 0 ? `bond +${s.bond.toFixed(1)}` : null,
+      s.allyFocus > 0 ? `allies +${s.allyFocus.toFixed(1)}` : null,
+      s.tankEngaging > 0 ? `tank +${s.tankEngaging.toFixed(1)}` : null,
+      s.offTank > 0 ? `off-tank +${s.offTank.toFixed(1)}` : null,
+      s.pounce > 0 ? `pounce +${s.pounce.toFixed(1)}` : null,
+      s.danger < 0 ? `danger ${s.danger.toFixed(1)}` : null,
+      s.finish > 0 ? `finish +${s.finish.toFixed(1)}` : null,
+      s.weakest > 0 ? `weak +${s.weakest.toFixed(1)}` : null,
+    ].filter(Boolean).join(' ');
+    scoreHtml = `<div class="dbg-row"><b>Score</b><span class="dbg-target">${s.total.toFixed(1)} · ${terms || '—'}</span></div>`;
+  }
+
+  // --- Morale state ---
+  // Confidence: current boldness/shaken-ness (the data behind the Confidence
+  // overlay). Player only.
+  let moraleHtml = '';
+  if (u.team === 'player') {
+    const confPct = Math.round(u.confidence * 100);
+    const confCls = u.confidence < 0.4 ? 'dbg-hp low' : u.confidence > 0.6 ? 'dbg-hp ok' : '';
+    moraleHtml += `<div class="dbg-row"><b>Confidence</b><span class="${confCls}">${confPct}%</span></div>`;
+    // Aggression: this member's own Retreat/Aggressive setting.
+    const aggroPct = Math.round(u.aggression * 100);
+    const aggroCls = u.aggression < 0.4 ? 'dbg-hp low' : u.aggression > 0.6 ? 'dbg-hp ok' : '';
+    moraleHtml += `<div class="dbg-row"><b>Aggression</b><span class="${aggroCls}">${aggroPct}%</span></div>`;
+    // Safety direction, if this member is retreating this frame.
+    if (u.safetyDir && (u.safetyDir.x !== 0 || u.safetyDir.y !== 0)) {
+      moraleHtml += `<div class="dbg-row"><b>Safety</b><span class="dbg-goal">(${u.safetyDir.x.toFixed(2)}, ${u.safetyDir.y.toFixed(2)})</span></div>`;
+    }
+    // Intel avoid decision, if this member made one this frame.
+    if (u.avoid) {
+      const a = u.avoid;
+      const action = a.action === 'retreat' ? 'Retreat' : 'Hold';
+      const flags = [
+        a.engaged ? 'engaged' : null,
+        a.outnumbered ? 'outnumbered' : null,
+        a.canEscape ? 'can-escape' : 'can\'t-escape',
+      ].filter(Boolean).join(' ');
+      moraleHtml += `<div class="dbg-row"><b>Avoid</b><span class="dbg-intent">${action} · danger ${a.danger.toFixed(0)} · ${flags} · ${a.reason}</span></div>`;
+    }
+  }
+
   return `
     <div class="dbg-unit" data-id="${u.id}">
       <div class="dbg-name">
@@ -588,10 +691,14 @@ function unitCard(u) {
         <span class="dbg-team">${u.team === 'player' ? 'team' : 'enemy'}</span>
         <span class="${hpCls}">${Math.round(u.hp)}/${u.maxHp}</span>
       </div>
+      <div class="dbg-sub">Combat</div>
       <div class="dbg-row"><b>Intent</b><span class="dbg-intent">${u.intent || '—'}</span></div>
       <div class="dbg-row"><b>Target</b><span class="dbg-target">${targetName}</span></div>
       <div class="dbg-row"><b>Goal</b><span class="dbg-goal">${goalTxt}</span></div>
-      ${avoidHtml}
+      ${u.team === 'player' ? `<div class="dbg-row"><b>Stamina</b><span class="dbg-intent">${Math.round(u.stamina)}${u.sprinting ? ' · sprinting' : ''}${u.dodgeTimer > 0 ? ' · dodging' : ''}</span></div>` : ''}
+      ${threatHtml}
+      ${scoreHtml}
+      ${moraleHtml ? `<div class="dbg-sub">Morale</div>${moraleHtml}` : ''}
     </div>`;
 }
 
@@ -620,6 +727,24 @@ function renderDebugBonds() {
           ${p.b.def.name || 'unit'}
           <span class="dbg-bond-val">${Math.round(p.bond)}</span>
         </div>`;
+    }
+  }
+
+  // Backup: which allies are steadying each member (the data behind the
+  // Backup overlay). Relational, so it lives here with bonds.
+  html += '<div class="dbg-section">Backup</div>';
+  const withBackup = alive.filter(u => u.backup && u.backup.parts.length);
+  if (withBackup.length === 0) {
+    html += '<div class="dbg-empty">No one is being steadied right now</div>';
+  } else {
+    for (const u of withBackup) {
+      html += `
+        <div class="dbg-bond">
+          <span class="dbg-swatch" style="background:${u.def.color}"></span>
+          ${u.def.name || 'unit'}
+          <span class="dbg-bond-val">+${u.backup.total.toFixed(1)}</span>
+        </div>
+        <div class="dbg-row"><span class="dbg-intent">${u.backup.parts.join(', ')}</span></div>`;
     }
   }
   dbgBodyEl.innerHTML = html;

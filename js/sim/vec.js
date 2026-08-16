@@ -4,6 +4,7 @@ export function add(a, b) { return { x: a.x + b.x, y: a.y + b.y }; }
 export function sub(a, b) { return { x: a.x - b.x, y: a.y - b.y }; }
 export function scale(a, s) { return { x: a.x * s, y: a.y * s }; }
 export function len(a) { return Math.hypot(a.x, a.y); }
+export function dot(a, b) { return a.x * b.x + a.y * b.y; }
 export function dist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
 
 export function norm(a) {

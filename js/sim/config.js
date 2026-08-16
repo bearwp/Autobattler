@@ -73,12 +73,13 @@ export const CONFIG = {
   members: [
     {
       id: 'm1', name: 'Tank', color: '#3b82f6', shape: 'square',
-      stats: { hp: 230, armor: 6, speed: 2.2, size: 0.9 },
-      attack: { type: 'taunt', shape: 'meleeOneShot', range: 4.0, atk: 11 },
+      stats: { hp: 320, armor: 10, speed: 2.2, size: 0.9 },
+      attack: { type: 'taunt', shape: 'meleeOneShot', range: 4.0, atk: 14 },
       modifiers: ['peel'],
       selfPreservation: [],
       target: { side: 'enemy', rule: 'closest' },
       movement: 'advance', leader: true, personality: 'stoic',
+      aggression: 0.9,
     },
     {
       id: 'm2', name: 'Soldier', color: '#ef4444', shape: 'square',
@@ -88,6 +89,7 @@ export const CONFIG = {
       selfPreservation: [],
       target: { side: 'enemy', rule: 'closest' },
       movement: 'charge', leader: false, personality: 'cocky',
+      aggression: 0.7,
     },
     {
       id: 'm3', name: 'Archer', color: '#22c55e', shape: 'triangle',
@@ -97,6 +99,7 @@ export const CONFIG = {
       selfPreservation: ['hide'],
       target: { side: 'enemy', rule: 'lowestHp' },
       movement: 'kite', leader: false, personality: 'cautious',
+      aggression: 0.3,
     },
     {
       id: 'm4', name: 'Healer', color: '#f8fafc', shape: 'circle',
@@ -106,6 +109,7 @@ export const CONFIG = {
       selfPreservation: ['hide'],
       target: { side: 'ally', rule: 'lowestHp' },
       movement: 'keepDistance', leader: false, personality: 'cheerful',
+      aggression: 0.4,
     },
   ],
 
@@ -183,6 +187,23 @@ export const CONFIG = {
     knockback: 3.2,        // impulse strength applied to a hit target
     knockbackDecay: 6.0,   // how fast a knockback impulse fades (per second)
     hitFlashDecay: 2.0,    // how fast the white damage flash fades (per second)
+    windupTime: 0.4,       // enemy telegraph before a hit lands (gives a dodge window)
+  },
+
+  // Stamina: a per-member resource that powers dodges and sprints. It
+  // regenerates over time, so a member can't dodge or run forever. Spending
+  // stamina is a tactical choice: dodge an incoming hit, or sprint to escape
+  // or close distance. A preservation floor keeps a reserve so a member is
+  // never left completely dry when it needs to escape.
+  stamina: {
+    max: 100,              // stamina pool
+    regen: 12,             // stamina restored per second
+    dodgeCost: 30,         // stamina spent to dodge an incoming hit
+    sprintCost: 20,        // stamina spent per second while sprinting
+    sprintMult: 1.5,       // speed multiplier while sprinting
+    dodgeWindow: 0.35,     // seconds of enemy windup during which a dodge is possible
+    reserveFrac: 0.3,      // fraction of max kept in reserve; never spend below it
+    dodgeMinDmg: 15,       // only dodge a hit that would deal at least this damage
   },
 
   // Threat / aggro
@@ -192,6 +213,8 @@ export const CONFIG = {
     healThreat: 20,         // threat added to a healer per heal
     backlineBias: 1.5,      // bats prefer squishy targets
     decayPerSec: 20,        // threat fades at this rate
+    tauntCooldown: 8,       // min seconds between taunts (raid-style, not spam)
+    tauntRefresh: 0.8,      // re-taunt when a taunted enemy's timer drops below this
   },
 
   // Team formation / behavior
@@ -244,6 +267,7 @@ export const CONFIG = {
   // dangerous enemy at full HP, pounce on it once it is softened.
   intel: {
     avoidDanger: 18,        // avg hit damage above which a squishy member holds back
+    unknownDanger: 14,      // assumed danger of an enemy kind the team has never been hit by (caution on the unknown)
     avoidHpFrac: 0.5,       // enemy HP fraction below which it is "vulnerable" (safe to engage)
     pounceWeight: 2.0,      // how much killability weights target choice
     dangerWeight: 1.0,      // how much learned danger weights target choice
@@ -255,6 +279,67 @@ export const CONFIG = {
     speedEscape: 1.1,       // member speed must exceed target speed by this factor to flee effectively
     tankArmor: 5,           // armor at/above which a member is a tank
     tankDangerMult: 2.0,    // how much more danger a tank tolerates before avoiding
+    // Emergent coordination weights (ally-aware target scoring). These make
+    // focus fire, "kill the weak first," and off-tanking emerge from each
+    // member reading what its allies are doing, instead of a leader calling
+    // plays.
+    allyFocusWeight: 2.0,   // pull toward what allies are already attacking
+    tankEngageWeight: 3.0,  // commit when a tank is engaging the target
+    offTankWeight: 2.0,     // a tanky member steps up when no tank is engaging
+    weakestWeight: 2.5,     // prefer cheap kills (low maxHp) to thin the horde
+    finishWeight: 2.0,      // prefer near-dead enemies to finish them off
+  },
+
+  // Confidence: a continuous 0..1 morale per member. Threats erode it (taking
+  // a hit, being forced to back off), safety restores it (no enemies, winning,
+  // healing). It feeds back into the avoid decision: a confident member is
+  // braver (tolerates more danger), a shaken one is more cautious. This makes
+  // the team's nerve an emergent, self-balancing quantity rather than a fixed
+  // rule. Personality biases the starting value so a cocky member is naturally
+  // bolder than a nervous one.
+  confidence: {
+    start: 0.5,             // base starting confidence
+    personalityBias: {      // additive starting offset per personality
+      cocky: 0.3, cheerful: 0.2, stoic: 0.1, cautious: -0.1, grumpy: -0.1, nervous: -0.3, chatty: 0.1,
+    },
+    hitDrop: 0.08,          // confidence lost each time the member is hit
+    avoidDrop: 0.12,        // confidence lost each time the member backs off (retreat/hold)
+    recoverRate: 0.06,      // confidence gained per second while safe
+    attackGain: 0.02,       // confidence gained each time the member lands a hit
+    killGain: 0.15,         // confidence gained each time the member kills an enemy
+    min: 0.1,               // floor (never fully fearless, never fully broken)
+    max: 1.0,               // ceiling
+    avoidMult: 1.0,         // how strongly confidence scales the danger threshold
+    safetyThreshold: 0.3,   // confidence below which a member seeks safety instead of fighting
+    safetyHysteresis: 0.1,  // dead-zone so seek-safety doesn't oscillate at the threshold
+    pressureRadius: 3.0,    // enemies within this sap confidence (close pressure)
+    pressurePerSec: 0.05,   // confidence lost per second per nearby enemy
+    pressureTargetMult: 2.0, // enemies actively targeting the member sap this much more
+    // Ally-aware nerve: nearby backup (a tank or the healer) damps fear, so a
+    // member is braver when the team is around and more rattled when isolated.
+    // This is the "rely on each other" mechanic — alone you're scared, with
+    // backup you commit.
+    backupRadius: 3.0,      // allies within this count as backup
+    backupTank: 1.0,        // fear damped by a nearby tank
+    backupHealer: 0.8,      // fear damped by a nearby healer
+    backupAlly: 0.4,        // fear damped by a nearby ally
+    safety: {               // how a shaken member picks its safety direction
+      threatWeight: 2.5,    // pull away from the nearest threat
+      healerWeight: 1.5,   // pull toward the healer
+      tankWeight: 1.2,     // pull toward the tankiest ally
+      spaceWeight: 1.0,    // pull away from nearby enemies (spacing)
+      allyWeight: 0.8,     // pull toward high-confidence allies (strength in numbers)
+      wallWeight: 1.5,     // pull away from walls so retreats don't pin into corners
+    },
+  },
+
+  // Team morale: a single team-wide value derived from the average confidence
+  // of the alive members. It feeds a small, shared combat bonus so the whole
+  // team fights a touch harder when morale is high and a touch worse when it
+  // sags. This makes confidence a team phenomenon, not just a per-member one.
+  morale: {
+    dmgMult: 0.15,          // attack damage scales by this * (morale - 0.5)
+    speedMult: 0.10,        // movement speed scales by this * (morale - 0.5)
   },
 
   // Synergy: persistent pair bonds between members. Bonds grow only from

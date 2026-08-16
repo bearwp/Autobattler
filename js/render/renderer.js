@@ -19,6 +19,13 @@ export class Renderer {
     this.offset = { x: 0, y: 0 };
     this.showDebug = false;     // toggle intent/goal/target debug overlay with the D key
     this.highlightId = null;    // unit id to draw a highlight ring around (debug hover)
+    // Per-layer overlay toggles, driven by the pills in the debug panel.
+    this.showAggro = true;      // enemy -> member threat lines
+    this.showConfidence = true; // green/red confidence rings
+    this.showBackup = true;     // faint backup-radius circles
+    this.showSafety = true;     // yellow safety-direction arrows
+    this.showTargets = true;    // dashed lines to attack targets
+    this.showIntent = true;     // intent text above units
     this._resize();
     window.addEventListener('resize', () => this._resize());
     // Re-fit whenever the canvas element's layout size changes (e.g. the
@@ -74,12 +81,77 @@ export class Renderer {
   // the D key. Reads sim state only; never mutates it.
   _drawDebug(sim) {
     const ctx = this.ctx;
+
+    // Layer 1: aggro lines. Enemy -> member, red, width scaled by threat, so
+    // you instantly see who is being focused or swarmed.
+    if (this.showAggro) {
+      for (const e of sim.enemyUnits) {
+        if (!e.alive || !e.target || !e.target.alive) continue;
+        const ep = this._toScreen(e.pos);
+        const tp = this._toScreen(e.target.pos);
+        const threat = e.threat.get(e.target.id) ?? 0;
+        const alpha = Math.min(0.9, 0.25 + threat / 300);
+        ctx.strokeStyle = `rgba(248,113,113,${alpha})`;
+        ctx.lineWidth = 1 + Math.min(3, threat / 150);
+        ctx.beginPath();
+        ctx.moveTo(ep.x, ep.y);
+        ctx.lineTo(tp.x, tp.y);
+        ctx.stroke();
+      }
+    }
+
     for (const u of sim.units) {
       if (!u.alive) continue;
       const p = this._toScreen(u.pos);
 
+      // Layer 2: confidence ring (player only). Green = bold, red = shaken.
+      // Reads team morale at a glance.
+      if (this.showConfidence && u.team === 'player') {
+        const c = u.confidence;
+        const r = Math.round(255 * (1 - c));
+        const g = Math.round(255 * c);
+        ctx.strokeStyle = `rgba(${r},${g},80,0.9)`;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, u.size * this.scale / 2 + 3, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
+      // Layer 3: backup radius (player only). Faint circle showing who is
+      // "covered" by allies vs isolated.
+      if (this.showBackup && u.team === 'player') {
+        const br = CONFIG.confidence.backupRadius * this.scale;
+        ctx.strokeStyle = 'rgba(148,163,184,0.15)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, br, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
+      // Layer 4: safety direction arrow (player only, when retreating).
+      if (this.showSafety && u.team === 'player' && u.safetyDir && (u.safetyDir.x !== 0 || u.safetyDir.y !== 0)) {
+        const d = u.safetyDir;
+        const len = 1.2 * this.scale;
+        const ex = p.x + d.x * len;
+        const ey = p.y + d.y * len;
+        ctx.strokeStyle = 'rgba(250,204,21,0.9)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y);
+        ctx.lineTo(ex, ey);
+        ctx.stroke();
+        // Arrowhead.
+        const ang = Math.atan2(d.y, d.x);
+        ctx.beginPath();
+        ctx.moveTo(ex, ey);
+        ctx.lineTo(ex - Math.cos(ang - 0.4) * 6, ey - Math.sin(ang - 0.4) * 6);
+        ctx.moveTo(ex, ey);
+        ctx.lineTo(ex - Math.cos(ang + 0.4) * 6, ey - Math.sin(ang + 0.4) * 6);
+        ctx.stroke();
+      }
+
       // Line to the attack target.
-      if (u.target && u.target.alive) {
+      if (this.showTargets && u.target && u.target.alive) {
         const tp = this._toScreen(u.target.pos);
         ctx.strokeStyle = u.team === 'player' ? 'rgba(251,191,36,0.7)' : 'rgba(248,113,113,0.7)';
         ctx.lineWidth = 1;
@@ -92,7 +164,7 @@ export class Renderer {
       }
 
       // Intent text above the unit.
-      if (u.intent) {
+      if (this.showIntent && u.intent) {
         ctx.font = '11px monospace';
         ctx.textAlign = 'center';
         ctx.fillStyle = 'rgba(0,0,0,0.6)';

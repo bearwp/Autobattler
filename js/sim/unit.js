@@ -13,6 +13,7 @@ export class Unit {
     this.team = opts.team;          // 'player' | 'enemy'
     this.isBat = opts.team === 'enemy';
     this.personality = def.personality || 'stoic'; // drives flavor of banter lines
+    this.aggression = def.aggression ?? 0.5; // 0..1 per-member caution: 0 = retreat, 1 = aggressive
     this.pos = { ...opts.pos };
     this.vel = { x: 0, y: 0 };
     this.knockback = { x: 0, y: 0 }; // impulse from being hit; decays each step
@@ -56,7 +57,9 @@ export class Unit {
     this.pathGoal = null;           // goal the current path was computed for
     this.following = false;         // follower is inside its follow distance
     this.seekingHeal = false;       // self-preservation: currently fleeing to healer
+    this.seekingSafety = false;     // low confidence: currently retreating to safety
     this.tauntTimer = 0;
+    this.tauntCooldown = 0;   // raid-style: min seconds between taunts
     this.taunted = false;
     this.kiteTimer = 0;
     this.slowTimer = 0;
@@ -64,6 +67,23 @@ export class Unit {
     this.avoid = null;        // last intel avoid decision: { action, danger, outnumbered, engaged, canEscape, reason } or null
     this.speakCooldown = 0;   // per-unit throttle for dialogue lines
     this.thinkTimer = 0;      // counts down to the next occasional "thinking" line
+
+    // Confidence: continuous 0..1 morale. Threats erode it, safety restores it,
+    // and it scales how much danger the member tolerates before backing off.
+    // Starts from a base plus a personality bias so a cocky member is naturally
+    // bolder than a nervous one. Persists on the member def so it carries
+    // across rooms (a member that got beaten down stays shaken).
+    const cf = CONFIG.confidence;
+    const bias = cf.personalityBias[this.personality] || 0;
+    this.confidence = clamp(cf.start + bias, cf.min, cf.max);
+
+    // Stamina: powers dodges and sprints. Regenerates over time; spending it
+    // is a tactical choice (dodge an incoming hit vs. sprint to escape/close).
+    this.stamina = CONFIG.stamina.max;
+    this.sprinting = false;   // currently sprinting (drains stamina, moves faster)
+    this.dodgeTimer = 0;     // brief invulnerability window after a successful dodge
+    this.windup = 0;         // enemy telegraph countdown before a hit lands (dodge window)
+    this.windupTarget = null; // the member this enemy is about to hit
   }
 
   // Convenience accessors for member attributes.
@@ -89,6 +109,16 @@ export class Unit {
     // Flash white when hit, proportional to the damage taken relative to max
     // health: a big chunk flashes bright, a small tick only tints.
     this.hitFlash = dmg / this.maxHp;
+    // Getting hit shakes a member's confidence (only player units have morale).
+    // The drop scales with how much damage actually landed relative to max HP,
+    // so a tank that shrugs off a hit (high armor, big pool) barely flinches
+    // while a squishy eating a big chunk is rattled hard.
+    if (this.team === 'player') {
+      const cf = CONFIG.confidence;
+      const frac = dmg / this.maxHp;
+      const drop = cf.hitDrop * (0.25 + frac * 3);
+      this.confidence = clamp(this.confidence - drop, cf.min, cf.max);
+    }
     if (this.hp <= 0) {
       this.hp = 0;
       this.alive = false;
@@ -138,11 +168,16 @@ export class Unit {
     this._intelRec(kind).hitsTaken++;
   }
 
-  // Record damage this member dealt to an enemy of `kind`.
+  // Record damage this member dealt to an enemy of `kind`. Landing a hit
+  // builds confidence (successful combat is morale-boosting).
   recordDeal(kind, dmg) {
     const r = this._intelRec(kind);
     r.hitsDealt++;
     r.dmgDealt += dmg;
+    if (this.team === 'player') {
+      const cf = CONFIG.confidence;
+      this.confidence = clamp(this.confidence + cf.attackGain, cf.min, cf.max);
+    }
   }
 
   // How many times this member has personally been hit by `kind`. Used to ramp

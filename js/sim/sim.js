@@ -4,7 +4,7 @@
 import { CONFIG } from './config.js';
 import { Grid } from './grid.js';
 import { Unit, pickTarget, nearestEnemy, threatenedEnemy, lowestHpAlly } from './unit.js';
-import { dist, len, norm, sub, add, scale, clampLen, clamp } from './vec.js';
+import { dist, len, norm, sub, add, scale, dot, clampLen, clamp } from './vec.js';
 
 export class Sim {
   constructor() {
@@ -45,6 +45,16 @@ export class Sim {
     this.intel = {};          // fresh run: the team forgets what it knew
     this._generateMap();
     this._enterNode(this.map.nodes[0].id);
+  }
+
+  // Team morale: the average confidence of the alive members, 0..1. Used as a
+  // small shared combat bonus so the whole team fights together.
+  get morale() {
+    const alive = this.playerUnits.filter(u => u.alive);
+    if (alive.length === 0) return 0.5;
+    let sum = 0;
+    for (const u of alive) sum += u.confidence;
+    return sum / alive.length;
   }
 
   // --- Synergy (pair bonds) ---
@@ -92,7 +102,14 @@ export class Sim {
   // cautious even though it has heard the tank grunt.
   memberDanger(u, kind) {
     const base = this.sharedDanger(kind);
-    if (base <= 0) return 0;
+    // No intel on this kind yet: assume a baseline danger so members are
+    // cautious against the unknown instead of charging in blind. Tanks are the
+    // exception — they're built to absorb and are the ones who engage first to
+    // learn, so they charge the unknown without fear. Once the team has been
+    // hit, the learned value takes over for everyone.
+    if (base <= 0) {
+      return u.armor >= CONFIG.intel.tankArmor ? 0 : CONFIG.intel.unknownDanger;
+    }
     const fam = u.familiarityOf(kind);
     const ramp = CONFIG.intel.familiarityRamp;
     return base * (1 - ramp * Math.exp(-fam));
@@ -474,8 +491,25 @@ export class Sim {
       u.secondaryTimer -= dt;
       u.tauntTimer = Math.max(0, u.tauntTimer - dt);
       if (u.tauntTimer <= 0) u.taunted = false;
+      u.tauntCooldown = Math.max(0, u.tauntCooldown - dt);
       u.kiteTimer = Math.max(0, u.kiteTimer - dt);
       u.slowTimer = Math.max(0, u.slowTimer - dt);
+      u.dodgeTimer = Math.max(0, u.dodgeTimer - dt);
+      // Sprinting is a per-frame state: clear it now; _sprint re-sets it only
+      // while a sprint is actually happening this frame.
+      u.sprinting = false;
+      // Enemy attack telegraph: count down the windup; when it lands, resolve
+      // the hit (the target may dodge it).
+      if (u.windup > 0) {
+        u.windup -= dt;
+        if (u.windup <= 0) {
+          u.windup = 0;
+          this._resolveEnemyHit(u, u.windupTarget);
+          u.windupTarget = null;
+        }
+      }
+      // Stamina regenerates over time.
+      if (u.team === 'player') u.stamina = Math.min(CONFIG.stamina.max, u.stamina + dt * CONFIG.stamina.regen);
       // Passive mana regen during combat so mana users (e.g. the healer)
       // can keep casting without needing to rest constantly.
       if (u.maxMana > 0) u.mana = Math.min(u.maxMana, u.mana + dt * CONFIG.combat.manaRegen);
@@ -543,7 +577,10 @@ export class Sim {
       if (u.team === 'enemy') {
         // A member whose target just died celebrates the kill.
         const killer = this.playerUnits.find(a => a.alive && a.target === u);
-        if (killer) this._say(killer, 'killing', u);
+        if (killer) {
+          this._say(killer, 'killing', u);
+          this._gainConfidence(killer, CONFIG.confidence.killGain);
+        }
       } else {
         // A member just fell: surviving allies react.
         for (const a of this.playerUnits) {
@@ -814,6 +851,10 @@ export class Sim {
     const enemies = this.enemyUnits.filter(e => e.alive);
     const allies = this.playerUnits.filter(a => a.alive);
 
+    // Clear the safety direction each frame; it is only re-set when a retreat
+    // path actually runs, so the debug arrow doesn't linger while advancing.
+    u.safetyDir = null;
+
     // Determine the target side and candidates.
     const side = u.targetRule.side;
     const candidates = side === 'ally' ? allies : enemies;
@@ -870,8 +911,56 @@ export class Sim {
     // priority over the normal movement decided above.
     this._selfPreservation(u, enemies, allies, dt);
 
+    // Confidence-driven safety: a shaken member retreats toward the healer,
+    // tank, and away from threats instead of fighting.
+    this._seekSafety(u, enemies, allies, dt);
+
     // Resolve attacks (primary + universal secondary).
     this._resolveAttacks(u, target, enemies, allies);
+
+    // Confidence recovers over time while the member is safe (not being hit
+    // and not backing off). It climbs fastest with no enemies around, but also
+    // recovers slowly during a fight the member is winning (landing hits and
+    // scoring kills add to it directly via recordDeal / killGain).
+    const cf = CONFIG.confidence;
+    if (enemies.length === 0) {
+      u.confidence = clamp(u.confidence + cf.recoverRate * dt, cf.min, cf.max);
+    } else if (u.hp / u.maxHp > 0.5) {
+      // In a fight but healthy: steady morale, slower than full safety.
+      u.confidence = clamp(u.confidence + cf.recoverRate * 0.5 * dt, cf.min, cf.max);
+    }
+
+    // Pressure: nearby enemies, and especially ones actively targeting this
+    // member, sap confidence over time. Being swarmed or singled out is
+    // demoralizing even before any hit lands.
+    let pressure = 0;
+    for (const e of enemies) {
+      if (!e.alive) continue;
+      const d = dist(u.pos, e.pos);
+      if (d <= cf.pressureRadius) {
+        pressure += cf.pressurePerSec;
+        if (e.target === u) pressure += cf.pressurePerSec * cf.pressureTargetMult;
+      }
+    }
+    // Backup damps the fear: a nearby tank, healer, or ally steadies the
+    // member, so it is braver when the team is around and rattled when alone.
+    // This is the "rely on each other" mechanic.
+    let backup = 0;
+    const backupParts = [];
+    for (const a of allies) {
+      if (a === u || !a.alive) continue;
+      if (dist(u.pos, a.pos) > cf.backupRadius) continue;
+      if (a.armor >= CONFIG.intel.tankArmor) { backup += cf.backupTank; backupParts.push(`${a.displayName}(tank)`); }
+      else if (a.attack && a.attack.type === 'heal') { backup += cf.backupHealer; backupParts.push(`${a.displayName}(healer)`); }
+      else { backup += cf.backupAlly; backupParts.push(`${a.displayName}(ally)`); }
+    }
+    // Store for the debug panel: how much backup is steadying this member and
+    // which allies are providing it.
+    u.backup = { total: backup, parts: backupParts };
+    pressure = Math.max(0, pressure - backup);
+    if (pressure > 0) {
+      u.confidence = clamp(u.confidence - pressure * dt, cf.min, cf.max);
+    }
 
     // Occasional "thinking" line reflecting what the unit is currently doing.
     this._think(u);
@@ -898,25 +987,94 @@ export class Sim {
   // (high danger) unless that enemy is already vulnerable.
   _focusFireTarget(u, target, enemies, allies) {
     const it = CONFIG.intel;
+    const ec = CONFIG.intel; // emergent coordination weights live under intel
+    const isTank = u.armor >= it.tankArmor;
+    // Is any tank (other than me) currently engaging a given enemy? A tank
+    // "engaging" means it has that enemy as its target. Used to make DPS
+    // commit when a tank is in front, and to let a tanky member step up
+    // (off-tank) when no tank is engaging.
+    const tankEngaging = (e) => allies.some(a => a !== u && a.alive && a.armor >= it.tankArmor &&
+      a.target && a.target.alive && a.target === e);
+    const anyTankEngaging = enemies.some(tankEngaging);
+
     let best = null, bestScore = -Infinity;
     for (const e of enemies) {
       if (!e.alive) continue;
       if (dist(u.pos, e.pos) > u.attack.range) continue;
       let score = 0;
+
+      // Emergent focus fire: pull toward what allies are already attacking.
+      // Bonded allies pull harder, so trusted teammates converge first.
+      let alliesOn = 0;
+      let bond = 0;
       for (const a of allies) {
         if (a === u || !a.alive) continue;
-        if (a.target === e) score += this._getBond(u, a) * CONFIG.synergy.focusBias;
+        if (a.target === e) {
+          alliesOn++;
+          const b = this._getBond(u, a) * CONFIG.synergy.focusBias;
+          bond += b;
+          score += b;
+        }
       }
+      score += alliesOn * ec.allyFocusWeight;
+
+      // Commit when a tank is engaging: DPS is braver behind a tank.
+      if (tankEngaging(e)) score += ec.tankEngageWeight;
+
+      // Off-tank: if I'm tanky and no tank is engaging anything, step up and
+      // take the strongest threat so the team always has a front line.
+      if (isTank && !anyTankEngaging) score += ec.offTankWeight;
+
       // Intel: pounce on what I've personally softened, avoid what the team
       // knows hits hard (ramped by my own familiarity) unless it is already
       // vulnerable (low HP).
       const kill = u.killabilityOf(e);
       const danger = this.memberDanger(u, e.def.kind);
       const vulnerable = e.hp / e.maxHp < it.avoidHpFrac;
-      score += kill * it.pounceWeight;
-      if (danger > it.avoidDanger && !vulnerable) score -= danger * it.dangerWeight;
+      const pounce = kill * it.pounceWeight;
+      const dangerPenalty = (danger > it.avoidDanger && !vulnerable) ? -(danger * it.dangerWeight) : 0;
+      score += pounce;
+      score += dangerPenalty;
+
+      // Kill the weak first: prefer cheap kills (low maxHp) to thin the horde,
+      // and near-dead enemies to finish them off. This makes the team mow down
+      // the swarm before turning on the strong ones.
+      const finish = (1 - e.hp / e.maxHp) * ec.finishWeight;
+      const weakest = (1 - e.maxHp / 200) * ec.weakestWeight;
+      score += finish;
+      score += weakest;
+
       if (score > bestScore) { bestScore = score; best = e; }
     }
+
+    // Record the score breakdown for the chosen target so the debug panel can
+    // show WHY it was picked, without duplicating the scoring logic.
+    if (best) {
+      const e = best;
+      const kill = u.killabilityOf(e);
+      const danger = this.memberDanger(u, e.def.kind);
+      const vulnerable = e.hp / e.maxHp < it.avoidHpFrac;
+      let alliesOn = 0, bond = 0;
+      for (const a of allies) {
+        if (a === u || !a.alive) continue;
+        if (a.target === e) { alliesOn++; bond += this._getBond(u, a) * CONFIG.synergy.focusBias; }
+      }
+      u.targetScore = {
+        total: bestScore,
+        alliesOn,
+        allyFocus: alliesOn * ec.allyFocusWeight,
+        bond,
+        tankEngaging: tankEngaging(e) ? ec.tankEngageWeight : 0,
+        offTank: (isTank && !anyTankEngaging) ? ec.offTankWeight : 0,
+        pounce: kill * it.pounceWeight,
+        danger: (danger > it.avoidDanger && !vulnerable) ? -(danger * it.dangerWeight) : 0,
+        finish: (1 - e.hp / e.maxHp) * ec.finishWeight,
+        weakest: (1 - e.maxHp / 200) * ec.weakestWeight,
+      };
+    } else {
+      u.targetScore = null;
+    }
+
     return best || target;
   }
 
@@ -958,11 +1116,9 @@ export class Sim {
     const hunter = threatenedEnemy(u, enemies);
     if (!hunter) return;
     if (dist(u.pos, hunter.pos) >= CONFIG.team.evadeDistance) return;
-    const away = norm(sub(u.pos, hunter.pos));
-    const toExit = norm(sub(this._exitGoal(), u.pos));
-    const dir = norm(add(away, scale(toExit, 0.8)));
+    const dir = this._safetyDirection(u, enemies, allies);
     this._intent(u, 'evading hunter');
-    this._setVel(u, scale(dir, u.effSpeed), dt);
+    this._setVel(u, scale(norm(dir), u.effSpeed), dt);
   }
 
   // Self-preservation instincts. These override the normal movement decided in
@@ -1014,6 +1170,95 @@ export class Sim {
     }
   }
 
+  // A shaken member (low confidence) seeks safety instead of fighting. It
+  // blends several instincts into one weighted direction: pull away from the
+  // nearest threat, toward the healer, toward the tankiest ally, and away
+  // from nearby enemies (spacing). This is driven by the same confidence
+  // attribute as the avoid decision, so a beaten-down member naturally
+  // retreats to safety while a confident one keeps fighting. Runs after the
+  // urgent self-preservation instincts (seek heal / hide) so those win.
+  _seekSafety(u, enemies, allies, dt) {
+    const cf = CONFIG.confidence;
+    // The member's own aggression slider shifts how shaken it must be before
+    // it stops fighting and flees. An aggressive member fights through the
+    // confidence spiral (lower threshold), a cautious one bails to safety
+    // sooner (higher threshold) to avoid it. This is the second half of the
+    // risk dial: the avoid decision sets when to back off a target, this sets
+    // when to give up on the fight entirely.
+    const effThreshold = cf.safetyThreshold * (1.5 - u.aggression);
+    const active = u.seekingSafety || u.confidence < effThreshold;
+    if (!active || u.confidence >= effThreshold + cf.safetyHysteresis) {
+      u.seekingSafety = false;
+      return;
+    }
+    u.seekingSafety = true;
+
+    const dir = this._safetyDirection(u, enemies, allies);
+    if (dir.x === 0 && dir.y === 0) return;
+    this._intent(u, 'seeking safety (shaken)');
+    // Sprint toward safety while stamina lasts.
+    this._sprint(u, norm(dir), dt);
+    this._separate(u, allies, dt);
+  }
+
+  // The single, reusable "where is safe?" direction. Blends several instincts
+  // into one weighted vector: away from the nearest threat, toward the healer,
+  // toward the tankiest ally, toward high-confidence allies (strength in
+  // numbers), away from nearby enemies (spacing), and away from walls so a
+  // retreat slides along a wall instead of pinning into a corner. Every
+  // retreat path (avoid, kite, evade, seek-safety) routes through this, so
+  // the whole team funnels toward safety instead of the exit.
+  _safetyDirection(u, enemies, allies) {
+    const s = CONFIG.confidence.safety;
+    let dir = { x: 0, y: 0 };
+
+    // Away from the nearest threat.
+    const threat = nearestEnemy(u, enemies);
+    if (threat) {
+      dir = add(dir, scale(norm(sub(u.pos, threat.pos)), s.threatWeight));
+    }
+
+    // Toward the healer.
+    const healer = allies.find(a => a.alive && a !== u && a.attack && a.attack.type === 'heal');
+    if (healer) {
+      dir = add(dir, scale(norm(sub(healer.pos, u.pos)), s.healerWeight));
+    }
+
+    // Toward the tankiest ally.
+    const tank = this._pickProtector(u, allies);
+    if (tank) {
+      dir = add(dir, scale(norm(sub(tank.pos, u.pos)), s.tankWeight));
+    }
+
+    // Toward high-confidence allies: strength in numbers. A confident ally is
+    // a safe ally, so the team clusters around whoever is holding their nerve.
+    for (const a of allies) {
+      if (a === u || !a.alive) continue;
+      if (a.confidence < CONFIG.confidence.safetyThreshold) continue;
+      const d = dist(u.pos, a.pos);
+      if (d > 0 && d < CONFIG.team.protectRadius) {
+        dir = add(dir, scale(norm(sub(a.pos, u.pos)), s.allyWeight * (1 - d / CONFIG.team.protectRadius)));
+      }
+    }
+
+    // Away from nearby enemies (spacing out).
+    for (const e of enemies) {
+      if (!e.alive) continue;
+      const d = dist(u.pos, e.pos);
+      if (d > 0 && d < CONFIG.team.protectRadius) {
+        dir = add(dir, scale(norm(sub(u.pos, e.pos)), s.spaceWeight * (1 - d / CONFIG.team.protectRadius)));
+      }
+    }
+
+    // Away from walls so a retreat slides along them instead of pinning into
+    // a corner. Reuses the same margin logic as the bats' wall avoidance.
+    dir = add(dir, scale(this._boidWallAvoidance(u), s.wallWeight));
+
+    // Store the blended direction for the debug overlay.
+    u.safetyDir = dir;
+    return dir;
+  }
+
   // Pick the ally to hide behind: the tankiest (highest armor, then HP),
   // excluding the unit itself. Falls back to the leader.
   _pickProtector(u, allies) {
@@ -1041,16 +1286,20 @@ export class Sim {
     if (avoid && avoid.action === 'retreat') {
       this._intent(u, 'backing off (dangerous enemy)');
       this._say(u, 'avoiding', target);
-      const away = norm(sub(u.pos, target.pos));
-      const toExit = norm(sub(this._exitGoal(), u.pos));
-      const dir = norm(add(away, scale(toExit, 0.8)));
-      this._setVel(u, scale(dir, u.effSpeed), dt);
+      this._dropConfidence(u, CONFIG.confidence.avoidDrop);
+      // Retreat toward safety (healer, tank, confident allies, away from
+      // threats and walls) rather than toward the exit, so the team funnels
+      // behind its front line instead of scattering to the door.
+      const dir = this._safetyDirection(u, enemies, allies);
+      // Sprint to escape a dangerous enemy while stamina lasts.
+      this._sprint(u, norm(dir), dt);
       this._separate(u, allies, dt);
       return;
     }
     if (avoid && avoid.action === 'hold') {
       this._intent(u, 'holding ground (can\'t escape)');
       this._say(u, 'holding', target);
+      this._dropConfidence(u, CONFIG.confidence.avoidDrop);
       this._idleWander(u, dt);
       this._separate(u, allies, dt);
       return;
@@ -1100,13 +1349,11 @@ export class Sim {
       }
       const dNear = dist(u.pos, near.pos);
       if (dNear < CONFIG.team.kiteDistance - CONFIG.team.kiteHysteresis) {
-        // Back away from the enemy, but bias the retreat toward the exit so
-        // the unit doesn't get pinned against the entrance wall.
+        // Back away toward safety (healer, tank, confident allies, away from
+        // threats and walls) so the unit doesn't get pinned against a wall.
         this._intent(u, 'kiting away');
-        const away = norm(sub(u.pos, near.pos));
-        const toExit = norm(sub(this._exitGoal(), u.pos));
-        const dir = norm(add(away, scale(toExit, 0.8)));
-        this._setVel(u, scale(dir, u.effSpeed), dt);
+        const dir = this._safetyDirection(u, enemies, allies);
+        this._setVel(u, scale(norm(dir), u.effSpeed), dt);
         u.kiteTimer = 0.3;
         return;
       }
@@ -1153,10 +1400,8 @@ export class Sim {
       const dH = dist(u.pos, hunter.pos);
       if (dH < CONFIG.team.evadeDistance - CONFIG.team.evadeHysteresis) {
         this._intent(u, 'evading hunter');
-        const away = norm(sub(u.pos, hunter.pos));
-        const toExit = norm(sub(this._exitGoal(), u.pos));
-        const dir = norm(add(away, scale(toExit, 0.8)));
-        this._setVel(u, scale(dir, u.effSpeed), dt);
+        const dir = this._safetyDirection(u, enemies, allies);
+        this._setVel(u, scale(norm(dir), u.effSpeed), dt);
         return;
       }
       if (dH > u.attack.range) {
@@ -1200,6 +1445,8 @@ export class Sim {
     }
 
     // Charge: build up speed toward the target and ram it for bonus damage.
+    // The closing burst is a stamina-powered sprint, so the same pool that
+    // fuels defensive escapes also fuels the offensive pursuit.
     if (mv === 'charge') {
       if (target && dist(u.pos, target.pos) > u.attack.range) {
         if (!u.chargeReady) this._say(u, 'charging', target);
@@ -1207,9 +1454,10 @@ export class Sim {
         this._intent(u, 'charging target');
         this._moveAlongPath(u, target.pos, dt);
         this._separate(u, allies, dt);
-        // Override the path speed with a charge burst.
+        // Charge burst: sprint toward the target, spending stamina for the
+        // speed boost. Stops at the reserve floor like any other sprint.
         const dir = norm(sub(target.pos, u.pos));
-        this._setVel(u, scale(dir, u.effSpeed * CONFIG.team.chargeSpeedMult), dt);
+        this._sprint(u, dir, dt);
         return;
       }
       if (!target) {
@@ -1255,7 +1503,10 @@ export class Sim {
       const prey = nearestEnemy(u, enemies);
       if (prey) {
         this._intent(u, 'hunting prey');
-        this._moveAlongPath(u, prey.pos, dt);
+        // Sprint to catch a fleeing target, else close at normal speed.
+        if (!this._pursue(u, prey, dt)) {
+          this._moveAlongPath(u, prey.pos, dt);
+        }
         this._separate(u, allies, dt);
         return;
       }
@@ -1268,7 +1519,10 @@ export class Sim {
     // Advance (default): move toward target, else toward exit.
     if (target && dist(u.pos, target.pos) > u.attack.range) {
       this._intent(u, 'advancing on target');
-      this._moveAlongPath(u, target.pos, dt);
+      // Sprint to catch a fleeing target, else close at normal speed.
+      if (!this._pursue(u, target, dt)) {
+        this._moveAlongPath(u, target.pos, dt);
+      }
       this._separate(u, allies, dt);
       return;
     }
@@ -1280,6 +1534,21 @@ export class Sim {
     }
     this._intent(u, 'attacking');
     u.vel = { x: 0, y: 0 };
+  }
+
+  // Lower a member's confidence (clamped to the floor). Called when the
+  // member is forced to back off, so retreating compounds into a shaken,
+  // more cautious state.
+  _dropConfidence(u, amount) {
+    const cf = CONFIG.confidence;
+    u.confidence = clamp(u.confidence - amount, cf.min, cf.max);
+  }
+
+  // Raise a member's confidence (clamped to the ceiling). Called when the
+  // member lands a hit or scores a kill, so successful combat builds morale.
+  _gainConfidence(u, amount) {
+    const cf = CONFIG.confidence;
+    u.confidence = clamp(u.confidence + amount, cf.min, cf.max);
   }
 
   // Intel-driven caution: decide how a squishy member reacts to a dangerous
@@ -1307,7 +1576,27 @@ export class Sim {
     // before they'll back off.
     const isTank = u.armor >= it.tankArmor;
     if (isTank) danger *= it.tankDangerMult;
-    if (danger <= it.avoidDanger) return null;
+    // Confidence scales the danger threshold: a confident member is braver
+    // (tolerates more danger), a shaken one is more cautious. This makes the
+    // team's nerve an emergent, self-balancing quantity.
+    const cf = CONFIG.confidence;
+    // Backup damps the danger threshold: a nearby tank, healer, or ally makes
+    // the member braver, so it commits when the team is around and backs off
+    // when isolated. This is the "rely on each other" mechanic.
+    let backup = 0;
+    for (const a of allies) {
+      if (a === u || !a.alive) continue;
+      if (dist(u.pos, a.pos) > cf.backupRadius) continue;
+      if (a.armor >= it.tankArmor) backup += cf.backupTank;
+      else if (a.attack && a.attack.type === 'heal') backup += cf.backupHealer;
+      else backup += cf.backupAlly;
+    }
+    // The member's own aggression slider scales the whole threshold: a cautious
+    // member (aggression near 0) backs off at much lower danger, an aggressive
+    // one (near 1) charges into fights it would otherwise avoid.
+    const aggro = 0.4 + u.aggression * 1.2; // 0.4 (retreat) .. 1.6 (aggressive)
+    const threshold = it.avoidDanger * (0.5 + u.confidence * cf.avoidMult) * aggro + backup;
+    if (danger <= threshold) return null;
     // Don't avoid if the target is already vulnerable (pounce instead).
     if (target.hp / target.maxHp < it.avoidHpFrac) return null;
     // If the member can actually finish the enemy, commit instead of fleeing.
@@ -1404,8 +1693,26 @@ export class Sim {
         break;
       }
       case 'taunt': {
-        // Taunt: force nearby enemies to target this unit.
+        // Raid-style taunt: spend it deliberately, not on every attack. It
+        // only fires when (a) the cooldown is ready and (b) some enemy in
+        // range is leaking aggro (its top threat isn't this tank) or its
+        // taunt is about to expire and needs refreshing. Otherwise the tank
+        // holds its taunt instead of wasting it.
+        if (u.tauntCooldown > 0) break;
         const radius = atk.range;
+        const refresh = CONFIG.threat.tauntRefresh;
+        let shouldTaunt = false;
+        for (const e of enemies) {
+          if (dist(u.pos, e.pos) > radius) continue;
+          // Leak: this enemy's highest threat is not the tank.
+          const top = e.highestThreatEnemy(this.units);
+          const leaking = !top || top.id !== u.id;
+          // Refresh: already taunted but the forced-target window is ending.
+          const expiring = e.taunted && e.tauntTimer <= refresh;
+          if (leaking || expiring) { shouldTaunt = true; break; }
+        }
+        if (!shouldTaunt) break;
+        u.tauntCooldown = CONFIG.threat.tauntCooldown;
         let hit = false;
         for (const e of enemies) {
           if (dist(u.pos, e.pos) <= radius) {
@@ -1500,8 +1807,12 @@ export class Sim {
     const shape = atk.shape;
     const range = atk.range;
     // A charge that connects deals bonus damage, then the charge is spent.
-    const dmg = atk.atk + (u.chargeReady ? CONFIG.team.chargeBonus : 0);
+    let dmg = atk.atk + (u.chargeReady ? CONFIG.team.chargeBonus : 0);
     if (u.chargeReady) u.chargeReady = false;
+    // Team morale: a confident team hits a touch harder, a shaken one softer.
+    if (u.team === 'player') {
+      dmg *= 1 + CONFIG.morale.dmgMult * (this.morale - 0.5);
+    }
 
     if (shape === 'rangeOneShot' || shape === 'meleeOneShot') {
       const dealt = target.takeDamage(dmg);
@@ -1617,17 +1928,64 @@ export class Sim {
       if (u.attackTimer <= 0) {
         u.attackTimer = CONFIG.combat.attackCooldown;
         u.target = target;
-        const dealt = target.takeDamage(u.def.atk);
-        target.recordHit(u.def.kind);
-        this.recordSharedHit(u.def.kind, dealt);
-        target.addThreat(u, u.def.atk);
-        this._knockback(target, u.pos, CONFIG.combat.knockback);
-        this.effects.push({
-          type: 'attack', from: { ...u.pos }, to: { ...target.pos },
-          color: '#f87171', life: 0.15,
-        });
+        this._startEnemyWindup(u, target);
       }
     }
+  }
+
+  // Begin an enemy attack: telegraph it with a windup so the target has a
+  // window to dodge. The hit itself resolves when the windup elapses (in the
+  // step loop), at which point the target may dodge it.
+  _startEnemyWindup(u, target) {
+    u.windup = CONFIG.combat.windupTime;
+    u.windupTarget = target;
+    this.effects.push({
+      type: 'telegraph', from: { ...u.pos }, to: { ...target.pos },
+      color: '#f87171', life: CONFIG.combat.windupTime,
+    });
+  }
+
+  // Resolve an enemy's telegraphed hit. The target may dodge it if it has
+  // stamina and is within the dodge window; otherwise it takes the damage.
+  _resolveEnemyHit(u, target) {
+    if (!target || !target.alive) return;
+    // Dodge: the target spends stamina to avoid the hit entirely.
+    if (this._tryDodge(target, u.def.atk)) {
+      this.effects.push({
+        type: 'dodge', from: { ...u.pos }, to: { ...target.pos },
+        color: '#a7f3d0', life: 0.2,
+      });
+      return;
+    }
+    const dealt = target.takeDamage(u.def.atk);
+    target.recordHit(u.def.kind);
+    this.recordSharedHit(u.def.kind, dealt);
+    target.addThreat(u, u.def.atk);
+    this._knockback(target, u.pos, CONFIG.combat.knockback);
+    this.effects.push({
+      type: 'attack', from: { ...u.pos }, to: { ...target.pos },
+      color: '#f87171', life: 0.15,
+    });
+  }
+
+  // A member tries to dodge an incoming hit. Succeeds if it has enough stamina
+  // and isn't already dodging; spends stamina and grants a brief invulnerable
+  // window. Returns true if the hit was avoided.
+  //
+  // Stamina preservation: a member only dodges a hit that is actually worth
+  // dodging (deals meaningful damage) and never spends below a reserve floor,
+  // so it always keeps enough stamina to sprint away if it needs to escape.
+  _tryDodge(u, incomingDmg) {
+    if (u.team !== 'player') return false;
+    const st = CONFIG.stamina;
+    // Only dodge hits that would hurt enough to justify the stamina cost.
+    if (incomingDmg < st.dodgeMinDmg) return false;
+    // Never spend below the reserve floor: keep enough to sprint to safety.
+    if (u.stamina - st.dodgeCost < st.max * st.reserveFrac) return false;
+    if (u.dodgeTimer > 0) return false;
+    u.stamina -= st.dodgeCost;
+    u.dodgeTimer = st.dodgeWindow;
+    return true;
   }
 
   // Brute: slow, tanky melee. Ignores boids cohesion, charges straight at the
@@ -1647,15 +2005,7 @@ export class Sim {
       if (u.attackTimer <= 0) {
         u.attackTimer = CONFIG.combat.attackCooldown;
         u.target = target;
-        const dealt = target.takeDamage(u.def.atk);
-        target.recordHit(u.def.kind);
-        this.recordSharedHit(u.def.kind, dealt);
-        target.addThreat(u, u.def.atk);
-        this._knockback(target, u.pos, CONFIG.combat.knockback);
-        this.effects.push({
-          type: 'attack', from: { ...u.pos }, to: { ...target.pos },
-          color: '#f87171', life: 0.15,
-        });
+        this._startEnemyWindup(u, target);
       }
     }
   }
@@ -1684,15 +2034,7 @@ export class Sim {
       if (u.attackTimer <= 0) {
         u.attackTimer = CONFIG.combat.attackCooldown;
         u.target = target;
-        const dealt = target.takeDamage(u.def.atk);
-        target.recordHit(u.def.kind);
-        this.recordSharedHit(u.def.kind, dealt);
-        target.addThreat(u, u.def.atk);
-        this._knockback(target, u.pos, CONFIG.combat.knockback);
-        this.effects.push({
-          type: 'attack', from: { ...u.pos }, to: { ...target.pos },
-          color: '#22d3ee', life: 0.15,
-        });
+        this._startEnemyWindup(u, target);
       }
     }
   }
@@ -1885,6 +2227,11 @@ export class Sim {
   // Smoothly accelerate toward a desired velocity instead of snapping to it.
   // This removes the jitter caused by instant velocity changes each step.
   _setVel(u, desired, dt) {
+    // Team morale: a confident team moves a touch faster, a shaken one slower.
+    if (u.team === 'player') {
+      const m = 1 + CONFIG.morale.speedMult * (this.morale - 0.5);
+      desired = scale(desired, m);
+    }
     const accel = CONFIG.team.accel * dt;
     const dv = sub(desired, u.vel);
     const dl = len(dv);
@@ -1893,6 +2240,39 @@ export class Sim {
     } else {
       u.vel = add(u.vel, scale(dv, accel / dl));
     }
+  }
+
+  // Sprint: move at a boosted speed while stamina lasts. Drains stamina per
+  // second; stops when exhausted. Returns the effective speed used.
+  _sprint(u, dir, dt) {
+    const st = CONFIG.stamina;
+    // Stop at the reserve floor, not at zero, so a member always keeps a
+    // little stamina in the tank.
+    const floor = st.max * st.reserveFrac;
+    if (u.stamina <= floor) {
+      u.sprinting = false;
+      return u.effSpeed;
+    }
+    u.sprinting = true;
+    u.stamina = Math.max(floor, u.stamina - st.sprintCost * dt);
+    this._setVel(u, scale(dir, u.effSpeed * st.sprintMult), dt);
+    return u.effSpeed * st.sprintMult;
+  }
+
+  // Sprint to close on a target that is retreating (moving away from this
+  // unit). Returns true if it sprinted. This lets a member burn stamina to
+  // catch a fleeing enemy instead of letting it escape.
+  _pursue(u, target, dt) {
+    if (!target || !target.alive) return false;
+    const toT = sub(target.pos, u.pos);
+    const d = len(toT);
+    if (d <= u.attack.range) return false;
+    // Only sprint if the target is actually moving away from us.
+    const away = dot(target.vel, norm(toT));
+    if (away <= 0) return false;
+    this._intent(u, 'pursuing retreating target');
+    this._sprint(u, norm(toT), dt);
+    return true;
   }
 
   // Apply a knockback impulse to a unit, pushing it away from `from`.
