@@ -15,9 +15,14 @@ export class Sim {
     this.enemyUnits = [];
     this.time = 0;
     this.started = false;
-    this.over = null;         // 'win' | 'lose' | null
+    this.over = null;         // 'win' | 'lose' | null (single-player) or 'a' | 'b' (pvp)
     this.paused = false;      // debug: freeze the sim so the player can inspect
     this.level = 1;
+    // PvP mode: two human-built teams fight to a wipe. When active, the
+    // roguelike map/rest/shop layers are bypassed entirely.
+    this.pvp = false;
+    this.teamAUnits = [];
+    this.teamBUnits = [];
     this.effects = [];        // transient visual effects (read by renderer)
     this._spawnQueue = [];    // team members waiting to enter the room
     this.deadIds = new Set(); // member ids that died this run (perma-death)
@@ -63,6 +68,44 @@ export class Sim {
     let sum = 0;
     for (const u of alive) sum += u.confidence;
     return sum / alive.length;
+  }
+
+  // Team morale for a specific unit: the average confidence of its own team.
+  // In single-player this is the player team; in PvP each team has its own.
+  _moraleOf(u) {
+    const alive = this._alliesOf(u).filter(x => x.alive);
+    if (alive.length === 0) return 0.5;
+    let sum = 0;
+    for (const x of alive) sum += x.confidence;
+    return sum / alive.length;
+  }
+
+  // --- Team-relative helpers ---
+  // In single-player, the player team fights the enemy team. In PvP, two
+  // human teams (a and b) fight each other. These helpers return the enemies
+  // and allies of any unit regardless of mode, so the member AI works for
+  // both teams in PvP without special-casing.
+  _enemiesOf(u) {
+    if (this.pvp) {
+      // In PvP, team A fights team B, and both teams also fight any PvE
+      // enemies in the arena (a neutral threat hostile to everyone).
+      const rival = u.team === 'a' ? this.teamBUnits : this.teamAUnits;
+      return this.enemyUnits.length > 0 ? [...rival, ...this.enemyUnits] : rival;
+    }
+    return u.team === 'player' ? this.enemyUnits : this.playerUnits;
+  }
+  _alliesOf(u) {
+    if (this.pvp) return u.team === 'a' ? this.teamAUnits : this.teamBUnits;
+    return u.team === 'player' ? this.playerUnits : this.enemyUnits;
+  }
+  // The units an enemy can target. In single-player that's the player team; in
+  // PvP the PvE enemies are hostile to BOTH human teams, so they target the
+  // combined alive members of team A and team B.
+  _enemyTargets() {
+    if (this.pvp) {
+      return [...this.teamAUnits, ...this.teamBUnits].filter(u => u.alive);
+    }
+    return this.playerUnits.filter(u => u.alive);
   }
 
   // --- Synergy (pair bonds) ---
@@ -647,6 +690,75 @@ export class Sim {
     this.started = true;
   }
 
+  // Start a PvP fight between two human-built teams. Each team is an array of
+  // member bundles (the same shape as CONFIG.members). Team A enters from the
+  // left door, team B from the right, and they fight to a wipe. The roguelike
+  // map/rest/shop layers are bypassed entirely.
+  startPvp(teamA, teamB, opts = {}) {
+    this.pvp = true;
+    this.units = [];
+    this.playerUnits = [];
+    this.enemyUnits = [];
+    this.teamAUnits = [];
+    this.teamBUnits = [];
+    this.time = 0;
+    this.started = true;
+    this.over = null;
+    this.effects = [];
+    this._spawnQueue = [];
+    this.bubbles = [];
+    this._nextBubbleAt = 0;
+    this.play = null;
+    this._spawnPvpTeam(teamA, 'a', 'left');
+    this._spawnPvpTeam(teamB, 'b', 'right');
+    // Optional PvE enemies in the arena, hostile to both teams. `count` is the
+    // number of enemies; `kind` picks the enemy type (defaults to a random
+    // combat type). They spawn in the middle of the arena.
+    if (opts.enemies && opts.enemies.count > 0) {
+      this._spawnPvpEnemies(opts.enemies.count, opts.enemies.kind);
+    }
+  }
+
+  // Spawn a small PvE swarm in the middle of the PvP arena. These enemies are
+  // hostile to both human teams (see _enemyTargets), so they act as a neutral
+  // threat both teams must deal with.
+  _spawnPvpEnemies(count, kind) {
+    const { width, height } = CONFIG.world;
+    const def = kind ? CONFIG.enemies[kind] : this._pickEnemyType();
+    for (let i = 0; i < count; i++) {
+      const pos = {
+        x: width / 2 + (Math.random() - 0.5) * 6,
+        y: height / 2 + (Math.random() - 0.5) * 4,
+      };
+      const u = new Unit({ ...def }, { team: 'enemy', pos });
+      this.units.push(u);
+      this.enemyUnits.push(u);
+    }
+  }
+
+  // Spawn one PvP team from a member bundle list. `side` is 'left' or 'right'
+  // and picks the door the team enters from. Members are staggered vertically
+  // across the door gap so they don't pile onto one point.
+  _spawnPvpTeam(members, team, side) {
+    const door = side === 'left' ? CONFIG.doors.entrance : CONFIG.doors.exit;
+    const gap = 0.8;
+    const doorHalf = door.width / 2;
+    const spread = Math.max(0.4, doorHalf - 0.4);
+    const alive = members.filter(m => m && m.stats);
+    const teamUnits = team === 'a' ? this.teamAUnits : this.teamBUnits;
+    alive.forEach((m, i) => {
+      const t = alive.length > 1 ? i / (alive.length - 1) : 0.5;
+      const y = door.y - spread + 2 * spread * t;
+      const pos = side === 'left'
+        ? { x: door.x + 0.5, y }
+        : { x: door.x - 0.5, y };
+      const u = new Unit(m, { team, pos });
+      u.slot = i;
+      this.units.push(u);
+      teamUnits.push(u);
+    });
+  }
+
   // Advance the sim by one fixed timestep (dt in seconds).
   step(dt) {
     if (!this.started || this.over || this.paused) return;
@@ -709,7 +821,7 @@ export class Sim {
         }
       }
       // Stamina regenerates over time.
-      if (u.team === 'player') u.stamina = Math.min(u.staminaMax, u.stamina + dt * u.staminaRegen);
+      if (!u.isBat) u.stamina = Math.min(u.staminaMax, u.stamina + dt * u.staminaRegen);
       // Passive mana regen during combat so mana users (e.g. the healer)
       // can keep casting without needing to rest constantly.
       if (u.maxMana > 0) u.mana = Math.min(u.maxMana, u.mana + dt * CONFIG.combat.manaRegen);
@@ -765,15 +877,16 @@ export class Sim {
           type: 'death', pos: { ...u.pos }, color: u.def.color, life: 0.4,
           max: 0.4,
         });
-        // Record perma-death for team members.
-        if (u.team === 'player') {
+        // Record perma-death for team members (single-player only).
+        if (!this.pvp && u.team === 'player') {
           this.deadIds.add(u.def.id);
           if (u.def.stats) u.def.stats.currentHp = 0;
         }
       }
     }
 
-    // Banter reactions to deaths that happened this step.
+    // Banter reactions to deaths that happened this step (single-player only).
+    if (!this.pvp) {
     for (const u of this.units) {
       if (!u.alive || !u._deathFx) continue;
       if (u.team === 'enemy') {
@@ -835,6 +948,7 @@ export class Sim {
     } else if (aliveEnemies > 2) {
       this._saidWinning = false;
     }
+    }
 
     // Team banter: age out bubbles and tick per-unit speak cooldowns. Lines
     // themselves are emitted at the moment their situation happens (see _say).
@@ -890,6 +1004,17 @@ export class Sim {
   }
 
   _checkEnd() {
+    // PvP: the fight ends when one team is fully wiped (no alive members and
+    // none left to enter). Minions don't count as team members.
+    if (this.pvp) {
+      const aAlive = this.teamAUnits.some(u => u.alive && u.def.kind !== 'minion');
+      const bAlive = this.teamBUnits.some(u => u.alive && u.def.kind !== 'minion');
+      if (!aAlive && !bAlive) { this.over = 'draw'; return; }
+      if (!aAlive) { this.over = 'b'; return; }
+      if (!bAlive) { this.over = 'a'; return; }
+      return;
+    }
+
     // Lose: all team members dead and none left to enter. Summoned minions
     // don't count as team members, so a lone minion can't prevent defeat.
     const realMembers = this.playerUnits.filter(u => u.def.kind !== 'minion');
@@ -980,59 +1105,87 @@ export class Sim {
   // situation: retreat when hurt, hold when outnumbered, focus the backline
   // when a squishy is exposed, otherwise focus fire.
   _callPlays(dt) {
-    const leader = this.playerUnits.find(a => a.alive && a.isLeader);
-    const enemies = this.enemyUnits.filter(e => e.alive);
-    if (!leader || enemies.length === 0) { this.play = null; return; }
+    // In PvP each team has its own leader and its own play state. In
+    // single-player there is one team (the player team).
+    const teams = this.pvp ? ['a', 'b'] : ['player'];
+    for (const team of teams) {
+      this._callPlaysForTeam(team, dt);
+    }
+  }
 
+  // The active play for a unit's team. In single-player there is one shared
+  // play; in PvP each team has its own.
+  _playOf(u) {
+    if (!this.pvp) return this.play;
+    return this.play ? this.play[u.team] : null;
+  }
+
+  _callPlaysForTeam(team, dt) {
+    const units = this.pvp
+      ? (team === 'a' ? this.teamAUnits : this.teamBUnits)
+      : this.playerUnits;
+    const enemies = this.pvp
+      ? (team === 'a' ? this.teamBUnits : this.teamAUnits)
+      : this.enemyUnits;
+    const leader = units.find(a => a.alive && a.isLeader);
+    const aliveEnemies = enemies.filter(e => e.alive);
+    if (!leader || aliveEnemies.length === 0) {
+      if (this.pvp) { if (this.play) this.play[team] = null; }
+      else this.play = null;
+      return;
+    }
+
+    const cur = this.pvp ? (this.play ? this.play[team] : null) : this.play;
     // Expire the current play once its duration elapses.
-    if (this.play && this.time >= this.play.until) {
-      this.play = null;
-      for (const a of this.playerUnits) a._saidRetreat = false;
+    if (cur && this.time >= cur.until) {
+      if (this.pvp) this.play[team] = null;
+      else this.play = null;
+      for (const a of units) a._saidRetreat = false;
     }
 
     // Only call a new play when there isn't one active.
-    if (this.play) return;
+    if (cur && this.time < cur.until) return;
 
     const t = CONFIG.team;
-    const allies = this.playerUnits.filter(a => a.alive);
+    const allies = units.filter(a => a.alive);
     const avgHp = allies.reduce((s, a) => s + a.hp / a.maxHp, 0) / allies.length;
     const play = { type: 'focus', targetId: null, until: this.time + t.playDuration };
 
     // Retreat: the team is badly hurt, fall back toward the exit to regroup.
     if (avgHp < t.retreatHpThreshold) {
       play.type = 'retreat';
-      this.play = play;
+      this._setPlay(team, play);
       return;
     }
 
     // Hold the line: heavily outnumbered, dig in and defend instead of pushing.
-    if (enemies.length > allies.length * t.holdOutnumberMult) {
+    if (aliveEnemies.length > allies.length * t.holdOutnumberMult) {
       play.type = 'hold';
-      this.play = play;
+      this._setPlay(team, play);
       return;
     }
 
     // Scatter: enemies are clustered together (AOE threat), so spread out to
     // avoid taking splash damage as a group.
-    if (this._enemiesClustered(enemies)) {
+    if (this._enemiesClustered(aliveEnemies)) {
       play.type = 'scatter';
-      this.play = play;
+      this._setPlay(team, play);
       return;
     }
 
     // Backline: a squishy enemy is exposed, focus it down.
-    const squishy = enemies.find(e => e.armor <= 0 && e.hp < e.maxHp * 0.8);
+    const squishy = aliveEnemies.find(e => e.armor <= 0 && e.hp < e.maxHp * 0.8);
     if (squishy) {
       play.type = 'backline';
       play.targetId = squishy.id;
-      this.play = play;
+      this._setPlay(team, play);
       return;
     }
 
     // Focus fire: pick the enemy most of the team is already attacking, or
     // the lowest-HP one, so the team concentrates damage and kills fast.
     const counts = new Map();
-    for (const u of this.playerUnits) {
+    for (const u of units) {
       if (!u.alive || !u.target || !u.target.alive) continue;
       counts.set(u.target.id, (counts.get(u.target.id) ?? 0) + 1);
     }
@@ -1046,13 +1199,22 @@ export class Sim {
     } else {
       // No one is attacking yet: focus the lowest-HP enemy.
       let low = null, lowHp = Infinity;
-      for (const e of enemies) {
+      for (const e of aliveEnemies) {
         if (e.hp < lowHp) { lowHp = e.hp; low = e; }
       }
       if (low) { play.type = 'focus'; play.targetId = low.id; }
     }
 
-    this.play = play;
+    this._setPlay(team, play);
+  }
+
+  _setPlay(team, play) {
+    if (this.pvp) {
+      if (!this.play) this.play = {};
+      this.play[team] = play;
+    } else {
+      this.play = play;
+    }
   }
 
   // True when a group of enemies is bunched together tightly enough that an
@@ -1071,8 +1233,8 @@ export class Sim {
   }
 
   _updateMember(u, dt) {
-    const enemies = this.enemyUnits.filter(e => e.alive);
-    const allies = this.playerUnits.filter(a => a.alive);
+    const enemies = this._enemiesOf(u).filter(e => e.alive);
+    const allies = this._alliesOf(u).filter(a => a.alive);
 
     // Stunned: can't move or act until the stun wears off.
     if (u.stunTimer > 0) {
@@ -1102,14 +1264,16 @@ export class Sim {
       target = this._focusFireTarget(u, target, enemies, allies);
       // Leader's play: if the leader called a focus/backline target, prefer it
       // so the team concentrates fire instead of scattering.
-      if (this.play && (this.play.type === 'focus' || this.play.type === 'backline') && this.play.targetId) {
-        const called = enemies.find(e => e.id === this.play.targetId);
+      const play = this._playOf(u);
+      if (play && (play.type === 'focus' || play.type === 'backline') && play.targetId) {
+        const called = enemies.find(e => e.id === play.targetId);
         if (called && dist(u.pos, called.pos) <= u.attack.range) target = called;
       }
     }
 
     // Leader's play overrides movement for the whole team.
-    if (this.play && this.play.type === 'retreat') {
+    const play = this._playOf(u);
+    if (play && play.type === 'retreat') {
       if (!u._saidRetreat) {
         u._saidRetreat = true;
         this._say(u, 'retreating');
@@ -1120,13 +1284,13 @@ export class Sim {
       this._resolveAttacks(u, target, enemies, allies);
       return;
     }
-    if (this.play && this.play.type === 'hold') {
+    if (play && play.type === 'hold') {
       this._intent(u, 'holding the line (leader call)');
       this._idleWander(u, dt);
       this._resolveAttacks(u, target, enemies, allies);
       return;
     }
-    if (this.play && this.play.type === 'scatter') {
+    if (play && play.type === 'scatter') {
       this._intent(u, 'scattering (leader call)');
       this._scatter(u, allies, enemies, dt);
       this._resolveAttacks(u, target, enemies, allies);
@@ -1233,7 +1397,7 @@ export class Sim {
       // Skip allies already carrying a fresh shield.
       if (a.shield > 0 && a.shield >= a.shieldMax * 0.5) continue;
       let threat = 0;
-      for (const e of this.enemyUnits) {
+      for (const e of this._enemiesOf(u)) {
         if (!e.alive) continue;
         const t = e.threat.get(a.id) ?? 0;
         threat += t;
@@ -1289,11 +1453,11 @@ export class Sim {
       x: u.pos.x + (target ? (target.pos.x - u.pos.x) * 0.3 : 1),
       y: u.pos.y + (target ? (target.pos.y - u.pos.y) * 0.3 : 0),
     };
-    const minion = new Unit(def, { team: 'player', pos });
+    const minion = new Unit(def, { team: u.team, pos });
     minion.minionOwner = u;
     minion.minionLife = m.life;
     this.units.push(minion);
-    this.playerUnits.push(minion);
+    this._alliesOf(u).push(minion);
   }
 
   // Focus fire: prefer an enemy a bonded ally is already attacking, so the
@@ -1521,7 +1685,7 @@ export class Sim {
       if (score > bestScore) { bestScore = score; best = a; }
     }
     if (best) return best;
-    return this.playerUnits.find(a => a.alive && a.isLeader) || null;
+    return this._alliesOf(u).find(a => a.alive && a.isLeader) || null;
   }
 
   // Unified per-frame decision (utility AI). Scores a small set of candidate
@@ -1598,6 +1762,9 @@ export class Sim {
   // the old critically-hurt / seek-heal / hide / seek-safety / evade-hunter
   // overrides into one score.
   _retreatScore(u, enemies, allies) {
+    // In PvP both teams fight to the death: no retreating, or the two
+    // symmetric teams would endlessly back away from each other and stall.
+    if (this.pvp) return { score: 0, reason: 'pvp' };
     const ai = CONFIG.ai.retreat;
     const cf = CONFIG.confidence;
     const t = CONFIG.team;
@@ -1873,7 +2040,29 @@ export class Sim {
         const dir = d > 0 ? scale(to, 1 / d) : { x: 0, y: 0 };
         return { pos: add(u.pos, scale(dir, desired)), intent: 'holding at range (hurt)' };
       }
-      return { pos: target.pos, intent: 'advancing on target' };
+      // Position at attack range from the target: a melee unit closes to
+      // point-blank, a ranged unit stops at its reach and shoots instead of
+      // walking into melee. `_doGoal` stops within goalRange of this point,
+      // so back the goal off by goalRange to land exactly at attack range.
+      const to = sub(target.pos, u.pos);
+      const d = len(to);
+      const stopRange = Math.max(0, range - CONFIG.movement.goalRange);
+      const desired = Math.max(0, d - stopRange);
+      const dir = d > 0 ? scale(to, 1 / d) : { x: 0, y: 0 };
+      return { pos: add(u.pos, scale(dir, desired)), intent: 'advancing on target' };
+    }
+
+    // No target in range yet (e.g. a ranged unit at spawn, or the last target
+    // just died): close on the nearest enemy instead of idling in place. This
+    // keeps the team advancing into the fight rather than holding at spawn.
+    const near = nearestEnemy(u, enemies);
+    if (near) {
+      const to = sub(near.pos, u.pos);
+      const d = len(to);
+      const stopRange = Math.max(0, range - CONFIG.movement.goalRange);
+      const desired = Math.max(0, d - stopRange);
+      const dir = d > 0 ? scale(to, 1 / d) : { x: 0, y: 0 };
+      return { pos: add(u.pos, scale(dir, desired)), intent: 'advancing on target' };
     }
 
     return null;
@@ -1941,7 +2130,7 @@ export class Sim {
     // position just outside attack range of the nearest enemy, so the member
     // closes distance and engages instead of running to the door. Only head
     // for the exit / formation when the room is actually clear.
-    const enemies = this.enemyUnits.filter(e => e.alive);
+    const enemies = this._enemiesOf(u).filter(e => e.alive);
     if (enemies.length > 0) {
       const near = nearestEnemy(u, enemies);
       if (near) {
@@ -1954,7 +2143,7 @@ export class Sim {
         return { pos: add(u.pos, scale(dir, desired)), leader: null };
       }
     }
-    const leader = this.playerUnits.find(a => a.alive && a.isLeader);
+    const leader = this._alliesOf(u).find(a => a.alive && a.isLeader);
     if (!leader || u.isLeader) return { pos: this._exitGoal(), leader: null };
     const back = norm(sub(leader.pos, this._exitGoal()));
     const t = CONFIG.team;
@@ -2136,7 +2325,7 @@ export class Sim {
         // Raise a disposable minion that rushes the nearest enemy. Capped by
         // a cooldown and a max-alive limit so it can't flood the field.
         if (u.summonTimer > 0) break;
-        const aliveMinions = this.playerUnits.filter(x => x.def.kind === 'minion' && x.alive).length;
+        const aliveMinions = this._alliesOf(u).filter(x => x.def.kind === 'minion' && x.alive).length;
         if (aliveMinions >= CONFIG.summon.maxAlive) break;
         u.summonTimer = CONFIG.summon.cooldown;
         this._summonMinion(u, target);
@@ -2289,13 +2478,17 @@ export class Sim {
     // A buff (Warhorn) empowers the target's damage while it lasts.
     if (u.buffTimer > 0 && u.buffMult > 0) dmg *= 1 + u.buffMult;
     // Team morale: a confident team hits a touch harder, a shaken one softer.
-    if (u.team === 'player') {
-      dmg *= 1 + CONFIG.morale.dmgMult * (this.morale - 0.5);
+    if (!u.isBat) {
+      dmg *= 1 + CONFIG.morale.dmgMult * (this._moraleOf(u) - 0.5);
     }
 
     if (shape === 'rangeOneShot' || shape === 'meleeOneShot') {
       const dealt = target.takeDamage(dmg);
       u.recordDeal(target.def.kind, dealt);
+      // Shared intel: the team learns how hard this kind hits. In PvE this is
+      // recorded when enemies hit members; in PvP both sides are members, so
+      // record it here too so the debug intel tab stays populated.
+      this.recordSharedHit(u.def.kind, dealt);
       target.addThreat(u, dmg);
       this._knockback(target, u.pos, CONFIG.combat.knockback);
       this.effects.push({
@@ -2315,6 +2508,7 @@ export class Sim {
         if (dist(center, e.pos) <= range) {
           const dealt = e.takeDamage(dmg);
           u.recordDeal(e.def.kind, dealt);
+          this.recordSharedHit(u.def.kind, dealt);
           e.addThreat(u, dmg);
           this._knockback(e, center, CONFIG.combat.knockback);
           hit = true;
@@ -2343,6 +2537,7 @@ export class Sim {
         if (angle <= arc / 2) {
           const dealt = e.takeDamage(dmg);
           u.recordDeal(e.def.kind, dealt);
+          this.recordSharedHit(u.def.kind, dealt);
           e.addThreat(u, dmg);
           this._knockback(e, u.pos, CONFIG.combat.knockback);
           hit = true;
@@ -2362,6 +2557,7 @@ export class Sim {
     u.secondaryTimer = CONFIG.secondary.cooldown;
     const dealt = target.takeDamage(CONFIG.secondary.atk);
     u.recordDeal(target.def.kind, dealt);
+    this.recordSharedHit(u.def.kind, dealt);
     target.addThreat(u, CONFIG.secondary.atk);
     this._knockback(target, u.pos, CONFIG.combat.knockback);
     this.effects.push({
@@ -2390,7 +2586,7 @@ export class Sim {
   }
 
   _updateBat(u, dt) {
-    const enemies = this.playerUnits.filter(e => e.alive);
+    const enemies = this._enemyTargets();
     if (enemies.length === 0) { u.vel = { x: 0, y: 0 }; return; }
 
     // Pick target: bias toward squishy (low-HP) and low-armor units.
@@ -2470,7 +2666,7 @@ export class Sim {
   // dodging (deals meaningful damage) and never spends below a reserve floor,
   // so it always keeps enough stamina to sprint away if it needs to escape.
   _tryDodge(u, incomingDmg) {
-    if (u.team !== 'player') return false;
+    if (u.isBat) return false;
     const st = CONFIG.stamina;
     // Only dodge hits that would hurt enough to justify the stamina cost.
     if (incomingDmg < st.dodgeMinDmg) return false;
@@ -2485,7 +2681,7 @@ export class Sim {
   // Brute: slow, tanky melee. Ignores boids cohesion, charges straight at the
   // target and hits hard up close.
   _updateBrute(u, dt) {
-    const enemies = this.playerUnits.filter(e => e.alive);
+    const enemies = this._enemyTargets();
     if (enemies.length === 0) { u.vel = { x: 0, y: 0 }; return; }
     const target = this._pickBatTarget(u, enemies);
 
@@ -2509,7 +2705,7 @@ export class Sim {
   // charges in so the tank can actually reach it, otherwise a slow melee
   // taunt-tank would endlessly chase a kiting ranged enemy it can't catch.
   _updateSpitter(u, dt) {
-    const enemies = this.playerUnits.filter(e => e.alive);
+    const enemies = this._enemyTargets();
     if (enemies.length === 0) { u.vel = { x: 0, y: 0 }; return; }
     const target = this._pickBatTarget(u, enemies);
 
@@ -2887,7 +3083,8 @@ export class Sim {
       if (this.bubbles[i].life <= 0) this.bubbles.splice(i, 1);
     }
     // Tick each unit's per-unit speak cooldown and think timer.
-    for (const u of this.playerUnits) {
+    const units = this.pvp ? this.units : this.playerUnits;
+    for (const u of units) {
       if (u.speakCooldown > 0) u.speakCooldown = Math.max(0, u.speakCooldown - dt);
       if (u.thinkTimer > 0) u.thinkTimer = Math.max(0, u.thinkTimer - dt);
     }
@@ -2935,7 +3132,7 @@ export class Sim {
       return;
     }
     // No enemies left: the team notices the room is clear.
-    if (this.enemyUnits.every(e => !e.alive)) {
+    if (this._enemiesOf(u).every(e => !e.alive)) {
       // If the unit is just standing around (not advancing), trade relaxed
       // quiet banter; otherwise note the room is clear and move on.
       const intent = u.intent || '';

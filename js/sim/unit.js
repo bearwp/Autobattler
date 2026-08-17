@@ -10,6 +10,10 @@ export class Unit {
   constructor(def, opts = {}) {
     this.id = NEXT_ID++;
     this.def = def;                 // member bundle (CONFIG.members[i]) or CONFIG.bat
+    // Members have no `kind` (only enemies do), but intel keys on kind. Give
+    // members a stable kind from their role so PvP intel (and the debug tab)
+    // records meaningful entries instead of lumping everyone under "undefined".
+    if (!def.kind) def.kind = def.role || def.name || 'member';
     this.team = opts.team;          // 'player' | 'enemy'
     this.isBat = opts.team === 'enemy';
     this.pos = { ...opts.pos };

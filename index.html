@@ -56,6 +56,10 @@
     }
     .member.dead { opacity: 0.4; }
     .member.dead .name::after { content: ' — dead'; color: #f87171; font-size: 10px; }
+    .member.team-a { border-color: #60a5fa; box-shadow: 0 0 0 1px rgba(96,165,250,0.35); }
+    .member.team-b { border-color: #f87171; box-shadow: 0 0 0 1px rgba(248,113,113,0.35); }
+    .member.team-a .name::before { content: 'A'; color: #60a5fa; font-size: 9px; font-weight: 700; }
+    .member.team-b .name::before { content: 'B'; color: #f87171; font-size: 9px; font-weight: 700; }
     .member .icon {
       width: 24px; height: 24px; flex: 0 0 auto;
       display: flex; align-items: center; justify-content: center;
@@ -611,6 +615,147 @@
     }
     .dbg-play-row b { color: #4ade80; }
 
+    /* Main menu overlay */
+    #main-menu {
+      position: fixed; inset: 0; z-index: 400;
+      background: radial-gradient(circle at 50% 30%, #1a1a24 0%, #0d0d14 70%);
+      display: flex; align-items: center; justify-content: center;
+    }
+    #main-menu.hidden { display: none; }
+    .menu-panel {
+      display: flex; flex-direction: column; align-items: center; gap: 28px;
+      text-align: center;
+    }
+    .menu-title { font-size: 40px; font-weight: 800; color: #e0e0e0; letter-spacing: 1px; }
+    .menu-title span { color: #fbbf24; }
+    .menu-sub { color: #888; font-size: 14px; margin: 0; }
+    .menu-choices { display: flex; gap: 20px; }
+    .menu-choice {
+      background: #1e1e26; border: 1px solid #3a3a45; border-radius: 12px;
+      padding: 24px 28px; width: 220px; cursor: pointer; text-align: left;
+      display: flex; flex-direction: column; gap: 8px; transition: border-color 0.15s, transform 0.15s;
+    }
+    .menu-choice:hover { border-color: #fbbf24; transform: translateY(-2px); }
+    .menu-choice h3 { margin: 0; font-size: 18px; color: #e0e0e0; }
+    .menu-choice.pve h3 { color: #4ade80; }
+    .menu-choice.pvp h3 { color: #f87171; }
+    .menu-choice p { margin: 0; color: #94a3b8; font-size: 12px; line-height: 1.5; }
+
+    /* PvP lobby overlay */
+    #pvp-lobby {
+      position: fixed; inset: 0; z-index: 235;
+      background: rgba(0, 0, 0, 0.85);
+      display: flex; align-items: center; justify-content: center;
+    }
+    #pvp-lobby.hidden { display: none; }
+    .pvp-lobby-panel {
+      background: #1e1e26; border: 1px solid #3a3a45; border-radius: 12px;
+      padding: 20px 24px; max-width: 92vw; display: flex; flex-direction: column; gap: 12px;
+    }
+    .pvp-lobby-panel h3 { margin: 0; color: #e0e0e0; font-size: 16px; }
+    .pvp-lobby-panel p { margin: 0; color: #888; font-size: 12px; }
+    .pvp-lobby-row { display: flex; gap: 8px; align-items: center; }
+    .pvp-lobby-row input {
+      background: #16161d; border: 1px solid #3a3a45; color: #e0e0e0;
+      border-radius: 6px; padding: 8px 10px; font-size: 13px; flex: 1;
+    }
+    .pvp-lobby-row button {
+      background: #2a2a35; color: #e0e0e0; border: 1px solid #3a3a45;
+      padding: 8px 14px; border-radius: 6px; cursor: pointer; font-size: 13px;
+    }
+    .pvp-lobby-row button:hover { background: #3a3a45; }
+    .pvp-lobby-row button.primary { background: #1d4ed8; border-color: #2563eb; color: #fff; }
+    .pvp-lobby-row button.primary:hover { background: #2563eb; }
+    .pvp-lobby-status { color: #fbbf24; font-size: 12px; min-height: 16px; }
+
+    /* PvP draft overlay */
+    #pvp-overlay {
+      position: fixed; inset: 0; z-index: 240;
+      background: rgba(0, 0, 0, 0.85);
+      display: flex; align-items: center; justify-content: center;
+    }
+    #pvp-overlay.hidden { display: none; }
+    .pvp-panel {
+      background: #1e1e26; border: 1px solid #3a3a45; border-radius: 12px;
+      padding: 20px 24px; max-width: 94vw; max-height: 92vh;
+      display: flex; flex-direction: column; gap: 12px;
+    }
+    .pvp-panel h3 { margin: 0; color: #e0e0e0; font-size: 16px; }
+    .pvp-head { display: flex; align-items: center; gap: 12px; }
+    .pvp-head .pvp-turn { flex: 1; font-size: 13px; }
+    .pvp-head .pvp-turn .turn-a { color: #60a5fa; font-weight: 700; }
+    .pvp-head .pvp-turn .turn-b { color: #f87171; font-weight: 700; }
+    .pvp-gold { color: #fbbf24; font-size: 13px; }
+    .pvp-round { color: #888; font-size: 12px; }
+    #pvp-pool {
+      display: flex; gap: 10px; flex-wrap: wrap;
+      overflow-y: auto; justify-content: center;
+    }
+    .pvp-card {
+      background: #16161d; border: 1px solid #2a2a35; border-radius: 8px;
+      padding: 10px; display: flex; flex-direction: column; gap: 4px;
+      width: 150px; cursor: pointer; transition: border-color 0.1s, transform 0.1s;
+    }
+    .pvp-card:hover { border-color: #fbbf24; transform: translateY(-2px); }
+    .pvp-card.picked { opacity: 0.35; cursor: not-allowed; }
+    .pvp-card.picked:hover { border-color: #2a2a35; transform: none; }
+    .pvp-card.dead { opacity: 0.4; cursor: not-allowed; border-color: #7f1d1d; }
+    .pvp-card.dead:hover { border-color: #7f1d1d; transform: none; }
+    .pvp-card .pc-pick.dead { color: #f87171; background: #2a1a1a; border-color: #7f1d1d; }
+    .pvp-card .pc-head { display: flex; align-items: center; gap: 6px; }
+    .pvp-card .pc-name { color: #e0e0e0; font-weight: 600; font-size: 12px; }
+    .pvp-card .pc-role { color: #fbbf24; font-size: 9px; text-transform: uppercase; letter-spacing: 0.05em; margin-left: auto; }
+    .pvp-card .pc-stats { color: #aaa; font-size: 10px; }
+    .pvp-card .pc-salary { color: #fbbf24; font-size: 11px; }
+    .pvp-card .pc-pick {
+      background: #2a2a35; color: #e0e0e0; border: 1px solid #3a3a45;
+      border-radius: 6px; padding: 4px 0; font-size: 11px; text-align: center;
+    }
+    .pvp-card .pc-pick.afford { background: #1d4ed8; border-color: #2563eb; color: #fff; }
+    .pvp-card .pc-pick.noafford { color: #666; }
+    .pvp-teams { display: flex; gap: 12px; }
+    .pvp-team {
+      flex: 1; background: #16161d; border: 1px solid #2a2a35; border-radius: 8px;
+      padding: 8px 10px; display: flex; flex-direction: column; gap: 4px;
+    }
+    .pvp-team .pt-name { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; }
+    .pvp-team.team-a .pt-name { color: #60a5fa; }
+    .pvp-team.team-b .pt-name { color: #f87171; }
+    .pvp-team .pt-members { color: #aaa; font-size: 11px; min-height: 14px; }
+    .pvp-footer { display: flex; align-items: center; gap: 12px; border-top: 1px solid #2a2a35; padding-top: 12px; }
+    .pvp-footer .pvp-status { color: #aaa; font-size: 12px; flex: 1; }
+    .pvp-footer button {
+      background: #2a2a35; color: #e0e0e0; border: 1px solid #3a3a45;
+      padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 13px;
+    }
+    .pvp-footer button:hover { background: #3a3a45; }
+    .pvp-footer button.primary { background: #1d4ed8; border-color: #2563eb; color: #fff; }
+    .pvp-footer button.primary:hover { background: #2563eb; }
+    .pvp-footer button.primary:disabled { background: #2a2a35; border-color: #3a3a45; color: #666; cursor: not-allowed; }
+
+    /* PvP result overlay */
+    #pvp-result {
+      position: fixed; inset: 0; z-index: 250;
+      background: rgba(0, 0, 0, 0.8);
+      display: flex; align-items: center; justify-content: center;
+    }
+    #pvp-result.hidden { display: none; }
+    .pvp-result-panel {
+      background: #1e1e26; border: 1px solid #3a3a45; border-radius: 12px;
+      padding: 24px 32px; text-align: center; display: flex; flex-direction: column; gap: 12px;
+    }
+    .pvp-result-panel h2 { margin: 0; font-size: 20px; }
+    .pvp-result-panel .res-a { color: #60a5fa; }
+    .pvp-result-panel .res-b { color: #f87171; }
+    .pvp-result-panel .res-draw { color: #fbbf24; }
+    .pvp-result-panel p { margin: 0; color: #aaa; font-size: 13px; }
+    .pvp-result-panel button {
+      background: #1d4ed8; border: 1px solid #2563eb; color: #fff;
+      padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 13px;
+    }
+    .pvp-result-panel button:hover { background: #2563eb; }
+    .pvp-result-panel .pvp-result-dead { color: #f87171; font-size: 12px; }
+
     /* Glossary overlay */
     #glossary-overlay {
       position: fixed; inset: 0; z-index: 300;
@@ -648,6 +793,22 @@
 </head>
 <body>
   <div id="app">
+    <div id="main-menu">
+      <div class="menu-panel">
+        <h1 class="menu-title">Dungeon <span>Autobattler</span></h1>
+        <p class="menu-sub">Choose a mode to begin.</p>
+        <div class="menu-choices">
+          <div class="menu-choice pve" id="menu-pve">
+            <h3>PvE</h3>
+            <p>Roguelike campaign. Draft a party, fight through rooms, upgrade your company across runs.</p>
+          </div>
+          <div class="menu-choice pvp" id="menu-pvp">
+            <h3>PvP</h3>
+            <p>Head-to-head. Draft two teams from a shared pool and watch them fight to a wipe.</p>
+          </div>
+        </div>
+      </div>
+    </div>
     <div id="hud">
       <span class="status" id="status">Ready</span>
       <span class="gold" id="gold-hud">🪙 0</span>
@@ -657,6 +818,7 @@
       <button id="btn-debug" class="toggle" title="Toggle debug panel">Debug</button>
       <button id="btn-plays" class="toggle" title="Toggle leader-called plays">Plays</button>
       <button id="btn-pause" title="Pause/resume the sim">Pause</button>
+      <button id="btn-pvp" title="Start a local PvP match (draft two teams)">PvP</button>
       <span class="hint">Space: start &nbsp;·&nbsp; R: reset room &nbsp;·&nbsp; D: debug &nbsp;·&nbsp; P: pause</span>
     </div>
     <div id="main-row">
@@ -782,7 +944,62 @@
         </div>
       </div>
     </div>
+    <div id="pvp-lobby" class="hidden">
+      <div class="pvp-lobby-panel">
+        <h3>Online PvP</h3>
+        <p>Host a room and share the code, or join a room with a code. The host runs the fight; the guest watches and drafts.</p>
+        <div class="pvp-lobby-row">
+          <button id="btn-pvp-host" class="primary">Host</button>
+          <button id="btn-pvp-local">Local match</button>
+          <span class="pvp-lobby-status" id="pvp-lobby-status"></span>
+        </div>
+        <div class="pvp-lobby-row">
+          <input id="pvp-join-code" placeholder="Room code" />
+          <button id="btn-pvp-join">Join</button>
+        </div>
+        <div class="pvp-lobby-row">
+          <button id="btn-pvp-lobby-close">Close</button>
+        </div>
+      </div>
+    </div>
+    <div id="pvp-overlay" class="hidden">
+      <div class="pvp-panel">
+        <div class="pvp-head">
+          <h3>Draft</h3>
+          <span class="pvp-round" id="pvp-round">Round 1 / 3</span>
+          <span class="pvp-turn" id="pvp-turn"></span>
+          <span class="pvp-gold" id="pvp-gold">🪙 0</span>
+        </div>
+        <div id="pvp-pool"></div>
+        <div class="pvp-teams">
+          <div class="pvp-team team-a">
+            <span class="pt-name">Team A</span>
+            <span class="pt-members" id="pvp-team-a"></span>
+          </div>
+          <div class="pvp-team team-b">
+            <span class="pt-name">Team B</span>
+            <span class="pt-members" id="pvp-team-b"></span>
+          </div>
+        </div>
+        <div class="pvp-footer">
+          <span class="pvp-status" id="pvp-status"></span>
+          <button id="btn-pvp-fight" class="primary" disabled>Fight</button>
+          <button id="btn-pvp-cancel">Cancel</button>
+        </div>
+      </div>
+    </div>
+    <div id="pvp-result" class="hidden">
+      <div class="pvp-result-panel">
+        <h2 id="pvp-result-title"></h2>
+        <p id="pvp-result-sub"></p>
+        <p id="pvp-result-dead" class="pvp-result-dead"></p>
+        <button id="btn-pvp-next" class="primary">Next round</button>
+        <button id="btn-pvp-rematch">Rematch</button>
+        <button id="btn-pvp-close">Close</button>
+      </div>
+    </div>
   </div>
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
   <script type="module" src="./js/main.js"></script>
 </body>
 </html>

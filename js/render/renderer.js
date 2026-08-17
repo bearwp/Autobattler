@@ -199,6 +199,10 @@ export class Renderer {
   _drawDebug(sim) {
     const ctx = this.ctx;
 
+    // A "member" is a player-controlled unit: the single-player team, or
+    // either PvP team. These get the full utility-AI debug layers.
+    const isMember = (u) => u.team === 'player' || (sim.pvp && (u.team === 'a' || u.team === 'b'));
+
     // Layer 1: aggro lines. Enemy -> member, red, width scaled by threat, so
     // you instantly see who is being focused or swarmed.
     if (this.showAggro) {
@@ -221,9 +225,9 @@ export class Renderer {
       if (!u.alive) continue;
       const p = this._toScreen(u.pos);
 
-      // Layer 2: confidence ring (player only). Green = bold, red = shaken.
+      // Layer 2: confidence ring (member only). Green = bold, red = shaken.
       // Reads team morale at a glance.
-      if (this.showConfidence && u.team === 'player') {
+      if (this.showConfidence && isMember(u)) {
         const c = u.confidence;
         const r = Math.round(255 * (1 - c));
         const g = Math.round(255 * c);
@@ -234,9 +238,9 @@ export class Renderer {
         ctx.stroke();
       }
 
-      // Layer 3: backup radius (player only). Faint circle showing who is
+      // Layer 3: backup radius (member only). Faint circle showing who is
       // "covered" by allies vs isolated.
-      if (this.showBackup && u.team === 'player') {
+      if (this.showBackup && isMember(u)) {
         const br = CONFIG.confidence.backupRadius * this.scale;
         ctx.strokeStyle = 'rgba(148,163,184,0.15)';
         ctx.lineWidth = 1;
@@ -245,8 +249,8 @@ export class Renderer {
         ctx.stroke();
       }
 
-      // Layer 4: safety direction arrow (player only, when retreating).
-      if (this.showSafety && u.team === 'player' && u.safetyDir && (u.safetyDir.x !== 0 || u.safetyDir.y !== 0)) {
+      // Layer 4: safety direction arrow (member only, when retreating).
+      if (this.showSafety && isMember(u) && u.safetyDir && (u.safetyDir.x !== 0 || u.safetyDir.y !== 0)) {
         const d = u.safetyDir;
         const len = 1.2 * this.scale;
         const ex = p.x + d.x * len;
@@ -270,7 +274,7 @@ export class Renderer {
       // Line to the attack target.
       if (this.showTargets && u.target && u.target.alive) {
         const tp = this._toScreen(u.target.pos);
-        ctx.strokeStyle = u.team === 'player' ? 'rgba(251,191,36,0.7)' : 'rgba(248,113,113,0.7)';
+        ctx.strokeStyle = u.team === 'player' ? 'rgba(251,191,36,0.7)' : u.team === 'a' ? 'rgba(96,165,250,0.7)' : 'rgba(248,113,113,0.7)';
         ctx.lineWidth = 1;
         ctx.setLineDash([3, 3]);
         ctx.beginPath();
@@ -287,14 +291,14 @@ export class Renderer {
         ctx.fillStyle = 'rgba(0,0,0,0.6)';
         const tw = ctx.measureText(u.intent).width;
         ctx.fillRect(p.x - tw / 2 - 3, p.y - 22, tw + 6, 14);
-        ctx.fillStyle = u.team === 'player' ? '#fbbf24' : '#f87171';
+        ctx.fillStyle = u.team === 'player' ? '#fbbf24' : u.team === 'a' ? '#60a5fa' : u.team === 'b' ? '#f87171' : '#f87171';
         ctx.fillText(u.intent, p.x, p.y - 11);
       }
 
-      // Decision breakdown (player only): the utility-AI score for each
+      // Decision breakdown (member only): the utility-AI score for each
       // candidate action, so you can see WHY the member acted. The winner is
       // highlighted; the reason string explains the top contributing signal.
-      if (this.showDecision && u.team === 'player' && u.decision) {
+      if (this.showDecision && isMember(u) && u.decision) {
         const d = u.decision;
         const lines = d.candidates.map(c => {
           const mark = c.name === d.action ? '▶' : ' ';
@@ -440,6 +444,16 @@ export class Renderer {
         }
       }
       ctx.restore();
+
+      // Team ring in PvP: blue for team A, red for team B, so you can tell
+      // who belongs to which side at a glance.
+      if (sim.pvp && (u.team === 'a' || u.team === 'b')) {
+        ctx.strokeStyle = u.team === 'a' ? 'rgba(96,165,250,0.9)' : 'rgba(248,113,113,0.9)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, s / 2 + 2, 0, Math.PI * 2);
+        ctx.stroke();
+      }
 
       // Taunted marker: orange ring around bats forced to target the tank.
       if (u.taunted) {

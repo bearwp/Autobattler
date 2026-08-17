@@ -4,8 +4,13 @@ import { CONFIG, ATTACK_TYPES, TARGET_RULES, ATTACK_SHAPES, SHAPES, MODIFIERS, S
 import { Sim } from './sim/sim.js';
 import { Renderer } from './render/renderer.js';
 import { getMeta, addGold, spendGold, salaryOf, startingHero, rollTavernRecruits, completeRun, resetMeta } from './meta.js';
+import { Draft, PVP, buildPool, goldForRound } from './pvp/draft.js';
+import { PvpNet, unitSnap, remoteSim } from './pvp/net.js';
 
 const canvas = document.getElementById('game');
+const mainMenuEl = document.getElementById('main-menu');
+const menuPveEl = document.getElementById('menu-pve');
+const menuPvpEl = document.getElementById('menu-pvp');
 const statusEl = document.getElementById('status');
 const teamUiEl = document.getElementById('team-ui');
 const customizerEl = document.getElementById('customizer');
@@ -19,6 +24,31 @@ const debugPanelEl = document.getElementById('debug-panel');
 const dbgBodyEl = document.getElementById('dbg-body');
 const dbgPlayEl = document.getElementById('dbg-play');
 const btnPause = document.getElementById('btn-pause');
+const btnPvp = document.getElementById('btn-pvp');
+const pvpOverlayEl = document.getElementById('pvp-overlay');
+const pvpPoolEl = document.getElementById('pvp-pool');
+const pvpRoundEl = document.getElementById('pvp-round');
+const pvpTurnEl = document.getElementById('pvp-turn');
+const pvpGoldEl = document.getElementById('pvp-gold');
+const pvpTeamAEl = document.getElementById('pvp-team-a');
+const pvpTeamBEl = document.getElementById('pvp-team-b');
+const pvpStatusEl = document.getElementById('pvp-status');
+const btnPvpFight = document.getElementById('btn-pvp-fight');
+const btnPvpCancel = document.getElementById('btn-pvp-cancel');
+const pvpResultEl = document.getElementById('pvp-result');
+const pvpResultTitleEl = document.getElementById('pvp-result-title');
+const pvpResultSubEl = document.getElementById('pvp-result-sub');
+const btnPvpRematch = document.getElementById('btn-pvp-rematch');
+const btnPvpClose = document.getElementById('btn-pvp-close');
+const btnPvpNext = document.getElementById('btn-pvp-next');
+const pvpResultDeadEl = document.getElementById('pvp-result-dead');
+const pvpLobbyEl = document.getElementById('pvp-lobby');
+const pvpLobbyStatusEl = document.getElementById('pvp-lobby-status');
+const btnPvpHost = document.getElementById('btn-pvp-host');
+const btnPvpLocal = document.getElementById('btn-pvp-local');
+const btnPvpJoin = document.getElementById('btn-pvp-join');
+const btnPvpLobbyClose = document.getElementById('btn-pvp-lobby-close');
+const pvpJoinCodeEl = document.getElementById('pvp-join-code');
 const mapOverlayEl = document.getElementById('map-overlay');
 const mapSvgEl = document.getElementById('map-svg');
 const restOverlayEl = document.getElementById('rest-overlay');
@@ -458,9 +488,13 @@ btnToggleCustomizer.addEventListener('click', () => {
 function buildTeamUi() {
   teamUiEl.innerHTML = '';
   memberEls.clear();
-  for (const m of sim.members) {
+  // In PvP both teams are fielded; show a card for every unit on the field.
+  const defs = sim.pvp
+    ? [...sim.teamAUnits, ...sim.teamBUnits].map(u => ({ def: u.def, unit: u }))
+    : sim.members.map(m => ({ def: m, unit: null }));
+  for (const { def: m, unit } of defs) {
     const root = document.createElement('div');
-    root.className = 'member';
+    root.className = 'member' + (sim.pvp ? (unit.team === 'a' ? ' team-a' : ' team-b') : '');
     root.innerHTML = `
       <div class="icon">${iconSvg(m)}</div>
       <div class="info">
@@ -473,8 +507,12 @@ function buildTeamUi() {
       </div>
     `;
     teamUiEl.appendChild(root);
-    memberEls.set(m.id, {
+    // Key by unit instance id in PvP (both teams can field the same member),
+    // by member id otherwise.
+    const key = sim.pvp ? unit.id : m.id;
+    memberEls.set(key, {
       root,
+      unit,
       hpfill: root.querySelector('.hpfill'),
       stamfill: root.querySelector('.stamfill'),
       status: root.querySelector('.status'),
@@ -788,8 +826,8 @@ btnRosterDone.addEventListener('click', () => {
   rosterOverlayEl.classList.add('hidden');
 });
 
-// Show the tavern on first load (before any run has started).
-showTavern('Welcome back. Hire a company and start a run.');
+// Show the main menu on first load (before any run has started).
+mainMenuEl.classList.remove('hidden');
 
 const dt = 1 / CONFIG.sim.hz;
 let accumulator = 0;
@@ -808,7 +846,7 @@ function frame(now) {
   }
   if (steps === CONFIG.sim.maxSubSteps) accumulator = 0;
 
-  renderer.render(sim, elapsed);
+  if (!pvpWatching) renderer.render(sim, elapsed);
   updateHud();
   updateTeamUi();
   updateMap();
@@ -818,6 +856,8 @@ function frame(now) {
   updateEvent();
   updateGoldHud();
   updateRunOver();
+  updatePvpResult();
+  broadcastSnapshot();
   requestAnimationFrame(frame);
 }
 
@@ -829,6 +869,7 @@ function updateGoldHud() {
 // When a run ends, automatically open the tavern for the next cycle.
 let runOverHandled = false;
 function updateRunOver() {
+  if (sim.pvp) return; // PvP has its own result overlay
   if (sim.over && !runOverHandled) {
     runOverHandled = true;
     showTavern(sim.over === 'win'
@@ -840,6 +881,21 @@ function updateRunOver() {
 }
 
 function updateHud() {
+  if (pvpWatching) {
+    statusEl.textContent = 'PvP — watching...';
+    statusEl.className = 'status';
+    return;
+  }
+  if (sim.pvp) {
+    if (sim.over) {
+      statusEl.textContent = sim.over === 'a' ? 'Team A wins!' : sim.over === 'b' ? 'Team B wins!' : 'Draw!';
+      statusEl.className = 'status';
+    } else {
+      statusEl.textContent = 'PvP — fighting...';
+      statusEl.className = 'status';
+    }
+    return;
+  }
   if (sim.over === 'win') {
     statusEl.textContent = 'Victory! The boss is slain. Return to the tavern.';
     statusEl.className = 'status win';
@@ -862,6 +918,24 @@ function updateHud() {
 }
 
 function updateTeamUi() {
+  if (sim.pvp) {
+    // PvP: cards are keyed by unit instance id; just refresh each live unit.
+    for (const u of sim.units) {
+      const el = memberEls.get(u.id);
+      if (!el) continue;
+      refreshMemberCard(el, u);
+    }
+    return;
+  }
+  if (pvpWatching) {
+    // Guest: refresh the cards from the last host snapshot.
+    for (const s of pvpRemoteUnits) {
+      const el = memberEls.get(s.id);
+      if (!el) continue;
+      refreshMemberCard(el, s);
+    }
+    return;
+  }
   for (const m of sim.members) {
     const el = memberEls.get(m.id);
     if (!el) continue;
@@ -890,28 +964,33 @@ function updateTeamUi() {
       el.conflabel.textContent = '—';
       continue;
     }
-    el.root.classList.toggle('dead', !u.alive);
-    el.hpfill.style.width = Math.round((u.hp / u.maxHp) * 100) + '%';
-    el.stamfill.style.width = Math.round((u.stamina / u.staminaMax) * 100) + '%';
-    el.stamfill.classList.toggle('sprinting', !!u.sprinting);
-
-    // Confidence dot: green = bold, amber = nervous, red = shaken.
-    const c = u.confidence;
-    el.conf.style.background = c > 0.6 ? '#4ade80' : c > 0.4 ? '#fbbf24' : '#f87171';
-    el.conf.style.color = el.conf.style.background;
-    // Confidence bar: a readable fill + percentage label.
-    el.conffill.style.width = Math.round(c * 100) + '%';
-    el.conffill.style.background = c > 0.6 ? '#4ade80' : c > 0.4 ? '#fbbf24' : '#f87171';
-    el.conflabel.textContent = Math.round(c * 100) + '%';
-
-    // Status line: what they're doing, and who they're doing it to.
-    let status = u.intent || '—';
-    if (u.target && u.target.alive) {
-      const tname = u.target.def.name || 'target';
-      status += ` <span class="st-target">→ ${tname}</span>`;
-    }
-    el.status.innerHTML = status;
+    refreshMemberCard(el, u);
   }
+}
+
+// Refresh a single bottom team card from its live unit.
+function refreshMemberCard(el, u) {
+  el.root.classList.toggle('dead', !u.alive);
+  el.hpfill.style.width = Math.round((u.hp / u.maxHp) * 100) + '%';
+  el.stamfill.style.width = Math.round((u.stamina / u.staminaMax) * 100) + '%';
+  el.stamfill.classList.toggle('sprinting', !!u.sprinting);
+
+  // Confidence dot: green = bold, amber = nervous, red = shaken.
+  const c = u.confidence;
+  el.conf.style.background = c > 0.6 ? '#4ade80' : c > 0.4 ? '#fbbf24' : '#f87171';
+  el.conf.style.color = el.conf.style.background;
+  // Confidence bar: a readable fill + percentage label.
+  el.conffill.style.width = Math.round(c * 100) + '%';
+  el.conffill.style.background = c > 0.6 ? '#4ade80' : c > 0.4 ? '#fbbf24' : '#f87171';
+  el.conflabel.textContent = Math.round(c * 100) + '%';
+
+  // Status line: what they're doing, and who they're doing it to.
+  let status = u.intent || '—';
+  if (u.target && u.target.alive) {
+    const tname = u.target.def.name || 'target';
+    status += ` <span class="st-target">→ ${tname}</span>`;
+  }
+  el.status.innerHTML = status;
 }
 
 btnStart.addEventListener('click', () => {
@@ -929,6 +1008,373 @@ btnStart.addEventListener('click', () => {
 });
 btnRestartRoom.addEventListener('click', () => sim.restartRoom());
 btnRestartRun.addEventListener('click', () => sim.reset());
+
+// --- PvP (local draft + fight) ---
+// A simple two-player mode: both players draft from a shared pool (snake
+// order), then their teams fight to a wipe. The draft is a host-owned state
+// machine. Locally both players share one Draft; online the host owns it and
+// broadcasts state to the guest, who sends picks and renders snapshots.
+
+let pvpDraft = null;   // the active Draft (host-owned, or guest's mirror)
+let pvpNet = null;     // PvpNet instance when online
+let pvpRole = 'local'; // 'local' | 'host' | 'guest'
+let pvpWatching = false; // guest is rendering host snapshots instead of the local sim
+let pvpRemoteBuilt = false; // guest has built the bottom team cards from a snapshot
+let pvpRemoteUnits = []; // guest's last snapshot units, for refreshing the cards
+
+function pvpCard(m) {
+  const dead = pvpDraft.dead.has(m.id);
+  const picked = !dead && !pvpDraft.available(m.id);
+  const afford = pvpDraft.canAfford(pvpDraft.turn, m.id);
+  const s = m.stats, a = m.attack;
+  const pickLabel = dead ? 'Fallen' : picked ? 'Picked' : afford ? 'Pick' : 'Too costly';
+  return `
+    <div class="pvp-card ${dead ? 'dead' : picked ? 'picked' : ''}" data-id="${m.id}">
+      <div class="pc-head">
+        <div class="icon">${iconSvg(m)}</div>
+        <span class="pc-name">${m.name}</span>
+        <span class="pc-role">${m.role || ''}</span>
+      </div>
+      <div class="pc-stats">HP ${s.hp} · Arm ${s.armor} · Spd ${s.speed.toFixed(1)}</div>
+      <div class="pc-salary">🪙 ${m.salary}</div>
+      <div class="pc-pick ${dead ? 'dead' : picked ? '' : afford ? 'afford' : 'noafford'}">${pickLabel}</div>
+    </div>`;
+}
+
+function renderPvpDraft() {
+  pvpPoolEl.innerHTML = pvpDraft.pool.map(pvpCard).join('');
+  pvpRoundEl.textContent = `Round ${pvpDraft.round} / ${pvpDraft.rounds} · Budget 🪙 ${goldForRound(pvpDraft.round)}`;
+  const turn = pvpDraft.turn;
+  pvpTurnEl.innerHTML = turn
+    ? `Your turn: <span class="turn-${turn}">Team ${turn.toUpperCase()}</span>`
+    : 'Draft complete';
+  pvpGoldEl.textContent = `🪙 ${pvpDraft.gold[pvpDraft.turn] ?? 0}`;
+  pvpTeamAEl.textContent = pvpDraft.team('a').map(m => m.name).join(', ') || '—';
+  pvpTeamBEl.textContent = pvpDraft.team('b').map(m => m.name).join(', ') || '—';
+  pvpStatusEl.textContent = pvpDraft.phase === 'betweenRounds'
+    ? 'Both teams drafted. Start the fight!'
+    : pvpDraft.phase === 'done'
+      ? 'Match over.'
+      : `Team ${turn.toUpperCase()} picks next`;
+  btnPvpFight.disabled = !pvpDraft.roundComplete;
+}
+
+function openPvpDraft() {
+  pvpDraft = new Draft(buildPool(CONFIG.roster), {
+    baseGold: PVP.baseGold,
+    goldPerRound: PVP.goldPerRound,
+    picksPerPlayer: PVP.picksPerPlayer,
+    rounds: PVP.rounds,
+  });
+  pvpResultEl.classList.add('hidden');
+  sim.over = null; // clear the finished fight so updatePvpResult doesn't re-show it
+  pvpOverlayEl.classList.remove('hidden');
+  renderPvpDraft();
+}
+
+// Broadcast the current draft state to the guest (host only).
+function broadcastDraft() {
+  if (pvpNet && pvpRole === 'host') pvpNet.send({ type: 'draft', draft: pvpDraft.serialize() });
+}
+
+// Start the fight from the current draft. Host runs the sim; guest just
+// watches snapshots. A small PvE swarm spawns in the arena, hostile to both
+// teams, so the round is a three-way scrap.
+function startPvpFight() {
+  if (!pvpDraft || !pvpDraft.roundComplete) return;
+  const teamA = pvpDraft.team('a');
+  const teamB = pvpDraft.team('b');
+  pvpOverlayEl.classList.add('hidden');
+  const enemies = { count: 3 + pvpDraft.round * 2 };
+  if (pvpRole === 'host' && pvpNet) {
+    pvpNet.send({ type: 'fight', teamA, teamB, enemies });
+  }
+  sim.startPvp(teamA, teamB, { enemies });
+  buildTeamUi();
+}
+
+// --- Main menu ---
+// The first screen on load: pick PvE (roguelike campaign) or PvP (draft fight).
+menuPveEl.addEventListener('click', () => {
+  mainMenuEl.classList.add('hidden');
+  showTavern('Welcome back. Hire a company and start a run.');
+});
+
+menuPvpEl.addEventListener('click', () => {
+  mainMenuEl.classList.add('hidden');
+  sim.paused = true;
+  pvpLobbyEl.classList.remove('hidden');
+  pvpLobbyStatusEl.textContent = '';
+});
+
+// --- Lobby ---
+btnPvp.addEventListener('click', () => {
+  sim.paused = true;
+  pvpLobbyEl.classList.remove('hidden');
+  pvpLobbyStatusEl.textContent = '';
+});
+
+btnPvpLobbyClose.addEventListener('click', () => {
+  pvpLobbyEl.classList.add('hidden');
+  sim.paused = false;
+  mainMenuEl.classList.remove('hidden');
+});
+
+// Local match: both players share one Draft on this machine.
+btnPvpLocal.addEventListener('click', () => {
+  pvpRole = 'local';
+  pvpLobbyEl.classList.add('hidden');
+  openPvpDraft();
+});
+
+// Host an online room.
+function hostOnline() {
+  pvpRole = 'host';
+  pvpNet = new PvpNet();
+  const code = 'ab' + Math.random().toString(36).slice(2, 6);
+  pvpLobbyStatusEl.textContent = 'Hosting... code: ' + code;
+  pvpNet.onOpen = () => {
+    pvpLobbyStatusEl.textContent = 'Guest connected. Drafting...';
+    pvpLobbyEl.classList.add('hidden');
+    openPvpDraft();
+    broadcastDraft();
+  };
+  pvpNet.onMessage = (msg) => {
+    if (msg.type === 'pick') {
+      // The guest owns team B: only accept its pick when it's team B's turn.
+      if (pvpDraft.turn === 'b' && pvpDraft.pick('b', msg.id)) {
+        renderPvpDraft();
+        broadcastDraft();
+      }
+    }
+  };
+  pvpNet.host(code);
+}
+
+// Host an online room (button).
+btnPvpHost.addEventListener('click', () => {
+  hostOnline();
+});
+
+// Join an online room (button).
+btnPvpJoin.addEventListener('click', () => {
+  const code = pvpJoinCodeEl.value.trim();
+  if (!code) { pvpLobbyStatusEl.textContent = 'Enter a room code.'; return; }
+  joinOnline(code);
+});
+
+// Join an online room as guest.
+function joinOnline(code) {
+  pvpRole = 'guest';
+  pvpNet = new PvpNet();
+  pvpLobbyStatusEl.textContent = 'Joining...';
+  pvpNet.onOpen = () => {
+    pvpLobbyStatusEl.textContent = 'Connected. Waiting for host to draft...';
+    pvpLobbyEl.classList.add('hidden');
+  };
+  pvpNet.onMessage = (msg) => {
+    if (msg.type === 'draft') {
+      pvpDraft = Draft.deserialize(msg.draft);
+      pvpResultEl.classList.add('hidden');
+      pvpOverlayEl.classList.remove('hidden');
+      renderPvpDraft();
+    } else if (msg.type === 'fight') {
+      pvpOverlayEl.classList.add('hidden');
+      pvpWatching = true;
+      pvpRemoteBuilt = false;
+      // Guest renders the host's fight via snapshots; no local sim.
+    } else if (msg.type === 'snap') {
+      renderRemote(msg);
+    } else if (msg.type === 'result') {
+      pvpWatching = false;
+      showPvpResult(msg.winner);
+    }
+  };
+  pvpNet.join(code);
+}
+
+// Render a host snapshot on the guest side.
+function renderRemote(msg) {
+  const units = msg.units.map(s => ({
+    id: s.id, team: s.team, alive: s.alive,
+    pos: { x: s.x, y: s.y }, facing: s.facing,
+    hp: s.hp, maxHp: s.maxHp, mana: s.mana, maxMana: s.maxMana,
+    shield: s.shield, shieldMax: s.shieldMax, stunTimer: s.stunTimer,
+    taunted: s.taunted, hitFlash: s.hitFlash, size: s.size,
+    stamina: s.stamina, staminaMax: s.staminaMax, sprinting: s.sprinting,
+    confidence: s.confidence, intent: s.intent,
+    def: s.def,
+  }));
+  // Resolve target references now that all units are materialized.
+  for (const u of units) {
+    if (u.targetId != null) {
+      const t = units.find(o => o.id === u.targetId);
+      if (t) u.target = t;
+    }
+  }
+  const remote = remoteSim(units, msg.over);
+  pvpRemoteUnits = units;
+  // Build the bottom team cards once from the first snapshot.
+  if (!pvpRemoteBuilt) {
+    pvpRemoteBuilt = true;
+    buildRemoteTeamUi(units);
+  }
+  // Swap the renderer's view to the remote sim for this frame.
+  renderer.render(remote, 0);
+  if (msg.over) showPvpResult(msg.over);
+}
+
+// Build the bottom team cards on the guest from a host snapshot.
+function buildRemoteTeamUi(units) {
+  teamUiEl.innerHTML = '';
+  memberEls.clear();
+  for (const s of units) {
+    const root = document.createElement('div');
+    root.className = 'member' + (s.team === 'a' ? ' team-a' : ' team-b');
+    root.innerHTML = `
+      <div class="icon">${iconSvg(s.def)}</div>
+      <div class="info">
+        <div class="name"><span class="conf" title="Confidence"></span>${s.def.name}</div>
+        <div class="ability">${s.def.attack.type} · ${s.def.attack.shape}</div>
+        <div class="status"></div>
+        <div class="bar"><span class="barlabel">HP</span><div class="hpbar"><div class="hpfill"></div></div></div>
+        <div class="bar"><span class="barlabel">ST</span><div class="stambar"><div class="stamfill"></div></div></div>
+        <div class="confrow"><span class="barlabel">CF</span><div class="confbar"><div class="conffill"></div></div><span class="conflabel"></span></div>
+      </div>
+    `;
+    teamUiEl.appendChild(root);
+    memberEls.set(s.id, {
+      root,
+      unit: s,
+      hpfill: root.querySelector('.hpfill'),
+      stamfill: root.querySelector('.stamfill'),
+      status: root.querySelector('.status'),
+      conf: root.querySelector('.conf'),
+      conffill: root.querySelector('.conffill'),
+      conflabel: root.querySelector('.conflabel'),
+    });
+  }
+}
+
+// Show the PvP result overlay (local or remote). Applies permadeath: members
+// who died this round are removed from the pool for the rest of the match.
+function showPvpResult(winner) {
+  if (!pvpResultEl.classList.contains('hidden')) return;
+  const title = winner === 'a' ? 'Team A wins!'
+    : winner === 'b' ? 'Team B wins!'
+    : 'Draw!';
+  pvpResultTitleEl.textContent = title;
+  pvpResultTitleEl.className = winner === 'a' ? 'res-a'
+    : winner === 'b' ? 'res-b' : 'res-draw';
+
+  // Permadeath: collect the ids of every member who died this round. On the
+  // guest we use the last snapshot's units (no local sim).
+  const fieldUnits = pvpRole === 'guest' ? pvpRemoteUnits : [...sim.teamAUnits, ...sim.teamBUnits];
+  const deadIds = [];
+  for (const u of fieldUnits) if (!u.alive) deadIds.push(u.def.id);
+  const newlyDead = pvpDraft.markDead(deadIds);
+  const deadNames = newlyDead.map(id => {
+    const m = pvpDraft.member(id);
+    return m ? m.name : id;
+  });
+
+  // Record the round result (advances to the next round or ends the match).
+  const matchOver = pvpDraft.phase === 'betweenRounds';
+  pvpDraft.recordRoundResult(winner);
+  const nextRound = pvpDraft.phase === 'drafting';
+
+  if (deadNames.length > 0) {
+    pvpResultDeadEl.textContent = `Fallen: ${deadNames.join(', ')}`;
+  } else {
+    pvpResultDeadEl.textContent = '';
+  }
+
+  if (nextRound) {
+    pvpResultSubEl.textContent = `Round ${pvpDraft.round} next. Budget rises to 🪙 ${goldForRound(pvpDraft.round)}.`;
+    btnPvpNext.classList.remove('hidden');
+    btnPvpRematch.classList.add('hidden');
+  } else {
+    pvpResultSubEl.textContent = 'The match is over. Rematch with a fresh draft, or close to return to single-player.';
+    btnPvpNext.classList.add('hidden');
+    btnPvpRematch.classList.remove('hidden');
+  }
+  pvpResultEl.classList.remove('hidden');
+}
+
+// Host broadcasts a snapshot each frame while a PvP fight is running.
+function broadcastSnapshot() {
+  if (pvpRole !== 'host' || !pvpNet || !sim.pvp) return;
+  pvpNet.send({
+    type: 'snap',
+    units: sim.units.map(unitSnap),
+    over: sim.over,
+  });
+  if (sim.over) {
+    pvpNet.send({ type: 'result', winner: sim.over });
+  }
+}
+
+pvpPoolEl.addEventListener('click', (e) => {
+  const card = e.target.closest('.pvp-card');
+  if (!card || !pvpDraft) return;
+  const id = card.dataset.id;
+  if (pvpRole === 'guest') {
+    // Guest owns team B: only send a pick when it's team B's turn.
+    if (pvpDraft.turn === 'b') pvpNet.send({ type: 'pick', id });
+    return;
+  }
+  // Local: both players share the machine, so the turn alternates naturally.
+  // Host online: the host owns team A, so it can only pick on team A's turn.
+  const myTeam = pvpRole === 'host' ? 'a' : pvpDraft.turn;
+  if (pvpDraft.pick(myTeam, id)) {
+    renderPvpDraft();
+    broadcastDraft();
+  }
+});
+
+btnPvpFight.addEventListener('click', startPvpFight);
+
+btnPvpCancel.addEventListener('click', () => {
+  pvpOverlayEl.classList.add('hidden');
+  if (pvpNet) { pvpNet.close(); pvpNet = null; }
+  pvpRole = 'local';
+  sim.paused = false;
+  mainMenuEl.classList.remove('hidden');
+});
+
+btnPvpRematch.addEventListener('click', () => {
+  pvpResultEl.classList.add('hidden');
+  if (pvpRole === 'guest') return; // host controls the next draft
+  openPvpDraft();
+  broadcastDraft();
+});
+
+// Advance to the next round's draft (host only). The draft already advanced
+// when the result was shown; this just reopens the draft overlay.
+btnPvpNext.addEventListener('click', () => {
+  pvpResultEl.classList.add('hidden');
+  if (pvpRole === 'guest') return; // host controls the next draft
+  pvpOverlayEl.classList.remove('hidden');
+  renderPvpDraft();
+  broadcastDraft();
+});
+
+btnPvpClose.addEventListener('click', () => {
+  pvpResultEl.classList.add('hidden');
+  if (pvpNet) { pvpNet.close(); pvpNet = null; }
+  pvpRole = 'local';
+  sim.paused = false;
+  sim.reset();
+  mainMenuEl.classList.remove('hidden');
+});
+
+// When a local PvP fight ends, show the result overlay instead of the tavern.
+function updatePvpResult() {
+  if (!sim.pvp) return;
+  if (sim.over && pvpResultEl.classList.contains('hidden')) {
+    showPvpResult(sim.over);
+  }
+}
 
 // --- Debug panel ---
 
@@ -1026,20 +1472,35 @@ function updateDebug() {
 }
 
 function renderDebugUnits() {
+  const isMember = (u) => u.team === 'player' || (sim.pvp && (u.team === 'a' || u.team === 'b'));
   const team = sim.playerUnits.filter(u => u.alive);
   const enemies = sim.enemyUnits.filter(e => e.alive);
   let html = '';
 
-  if (team.length) {
-    html += `<div class="dbg-section">Team — morale ${Math.round(sim.morale * 100)}%</div>`;
-    for (const u of team) html += unitCard(u);
-  }
-  if (enemies.length) {
-    html += '<div class="dbg-section">Enemies</div>';
-    for (const u of enemies) html += unitCard(u);
-  }
-  if (!team.length && !enemies.length) {
-    html = '<div class="dbg-empty">No units alive</div>';
+  if (sim.pvp) {
+    const a = sim.teamAUnits.filter(u => u.alive);
+    const b = sim.teamBUnits.filter(u => u.alive);
+    if (a.length) {
+      html += '<div class="dbg-section">Team A</div>';
+      for (const u of a) html += unitCard(u);
+    }
+    if (b.length) {
+      html += '<div class="dbg-section">Team B</div>';
+      for (const u of b) html += unitCard(u);
+    }
+    if (!a.length && !b.length) html = '<div class="dbg-empty">No units alive</div>';
+  } else {
+    if (team.length) {
+      html += `<div class="dbg-section">Team — morale ${Math.round(sim.morale * 100)}%</div>`;
+      for (const u of team) html += unitCard(u);
+    }
+    if (enemies.length) {
+      html += '<div class="dbg-section">Enemies</div>';
+      for (const u of enemies) html += unitCard(u);
+    }
+    if (!team.length && !enemies.length) {
+      html = '<div class="dbg-empty">No units alive</div>';
+    }
   }
   dbgBodyEl.innerHTML = html;
 
@@ -1055,6 +1516,7 @@ function renderDebugUnits() {
 }
 
 function unitCard(u) {
+  const isMember = u.team === 'player' || (sim.pvp && (u.team === 'a' || u.team === 'b'));
   const hpFrac = u.hp / u.maxHp;
   const hpCls = hpFrac <= 0.25 ? 'dbg-hp low' : 'dbg-hp ok';
   const targetName = u.target && u.target.alive ? (u.target.def.name || 'target') : '—';
@@ -1078,9 +1540,9 @@ function unitCard(u) {
       .join(' · ');
     threatHtml = `<div class="dbg-row"><b>Threat</b><span class="dbg-aggro">${rows}</span></div>`;
   }
-  // Target score breakdown: why this target was picked (player only).
+  // Target score breakdown: why this target was picked (member only).
   let scoreHtml = '';
-  if (u.team === 'player' && u.targetScore && u.target && u.target.alive) {
+  if (isMember && u.targetScore && u.target && u.target.alive) {
     const s = u.targetScore;
     const terms = [
       s.bond > 0 ? `bond +${s.bond.toFixed(1)}` : null,
@@ -1097,9 +1559,9 @@ function unitCard(u) {
 
   // --- Morale state ---
   // Confidence: current boldness/shaken-ness (the data behind the Confidence
-  // overlay). Player only.
+  // overlay). Member only.
   let moraleHtml = '';
-  if (u.team === 'player') {
+  if (isMember) {
     const confPct = Math.round(u.confidence * 100);
     const confCls = u.confidence < 0.4 ? 'dbg-hp low' : u.confidence > 0.6 ? 'dbg-hp ok' : '';
     moraleHtml += `<div class="dbg-row"><b>Confidence</b><span class="${confCls}">${confPct}%</span></div>`;
@@ -1119,14 +1581,14 @@ function unitCard(u) {
       <div class="dbg-name">
         <span class="dbg-swatch" style="background:${u.def.color}"></span>
         ${u.def.name || 'unit'}
-        <span class="dbg-team">${u.team === 'player' ? 'team' : 'enemy'}</span>
+        <span class="dbg-team">${u.team === 'player' ? 'team' : u.team === 'a' ? 'A' : u.team === 'b' ? 'B' : 'enemy'}</span>
         <span class="${hpCls}">${Math.round(u.hp)}/${u.maxHp}</span>
       </div>
       <div class="dbg-sub">Combat</div>
       <div class="dbg-row"><b>Intent</b><span class="dbg-intent">${u.intent || '—'}</span></div>
       <div class="dbg-row"><b>Target</b><span class="dbg-target">${targetName}</span></div>
       <div class="dbg-row"><b>Goal</b><span class="dbg-goal">${goalTxt}</span></div>
-      ${u.team === 'player' ? `<div class="dbg-row"><b>Stamina</b><span class="dbg-intent">${Math.round(u.stamina)}${u.sprinting ? ' · sprinting' : ''}${u.dodgeTimer > 0 ? ' · dodging' : ''}</span></div>` : ''}
+      ${isMember ? `<div class="dbg-row"><b>Stamina</b><span class="dbg-intent">${Math.round(u.stamina)}${u.sprinting ? ' · sprinting' : ''}${u.dodgeTimer > 0 ? ' · dodging' : ''}</span></div>` : ''}
       ${threatHtml}
       ${scoreHtml}
       ${moraleHtml ? `<div class="dbg-sub">Morale</div>${moraleHtml}` : ''}
@@ -1207,7 +1669,8 @@ function renderDebugPlays() {
 // member's personal familiarity and killability that drive the avoid/pounce
 // behavior.
 function renderDebugIntel() {
-  const alive = sim.playerUnits.filter(u => u.alive);
+  const isMember = (u) => u.team === 'player' || (sim.pvp && (u.team === 'a' || u.team === 'b'));
+  const alive = sim.units.filter(u => u.alive && isMember(u));
   let html = '<div class="dbg-section">Team knowledge (shared)</div>';
   const kinds = Object.entries(sim.intel).filter(([, r]) => r && r.hitsTaken > 0);
   if (kinds.length === 0) {
@@ -1529,6 +1992,10 @@ document.getElementById('btn-finish-event').addEventListener('click', () => {
 window.addEventListener('keydown', (e) => {
   if (e.code === 'Space') {
     e.preventDefault();
+    if (!mainMenuEl.classList.contains('hidden')) {
+      menuPveEl.click();
+      return;
+    }
     if (!tavernOverlayEl.classList.contains('hidden')) {
       btnTavernLeave.click();
       return;
