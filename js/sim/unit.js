@@ -12,7 +12,6 @@ export class Unit {
     this.def = def;                 // member bundle (CONFIG.members[i]) or CONFIG.bat
     this.team = opts.team;          // 'player' | 'enemy'
     this.isBat = opts.team === 'enemy';
-    this.personality = def.personality || 'stoic'; // drives flavor of banter lines
     this.pos = { ...opts.pos };
     this.vel = { x: 0, y: 0 };
     this.knockback = { x: 0, y: 0 }; // impulse from being hit; decays each step
@@ -82,15 +81,11 @@ export class Unit {
     // and it scales how much danger the member tolerates before backing off.
     // The member's own `confidence` base (its composure) sets both the starting
     // value and the recovery target, so a naturally brave member steadies high
-    // while a nervous one settles low. A small personality bias nudges it.
-    // Persists on the member def so it carries across rooms (a member that got
-    // beaten down stays shaken).
+    // while a nervous one settles low. Persists on the member def so it carries
+    // across rooms (a member that got beaten down stays shaken).
     const cf = CONFIG.confidence;
     this.baseConfidence = clamp(def.confidence ?? 0.5, cf.min, cf.max);
-    this.confidence = clamp(
-      this.baseConfidence + (cf.personalityBias[this.personality] || 0),
-      cf.min, cf.max
-    );
+    this.confidence = clamp(this.baseConfidence, cf.min, cf.max);
 
     // Stamina: powers dodges and sprints. Regenerates over time; spending it
     // is a tactical choice (dodge an incoming hit vs. sprint to escape/close).
@@ -116,6 +111,18 @@ export class Unit {
 
   // Effective speed, halved while slowed.
   get effSpeed() { return this.slowTimer > 0 ? this.speed * 0.5 : this.speed; }
+
+  // Durability: effective hit points (HP + armor scaled). A single quantity
+  // that captures "how much punishment this member can absorb." Used by the
+  // AI everywhere a front-line / tank / squishy distinction used to be
+  // recomputed with a magic threshold, so the notion of "tanky" is defined
+  // once and stays consistent.
+  get durability() { return this.hp + this.armor * 10; }
+
+  // Is this member a front-liner? A durable member is built to absorb and
+  // steps up to engage; a fragile one hangs back. The threshold is a shared
+  // constant so every AI layer agrees on who is "tanky."
+  get isFrontline() { return this.durability >= CONFIG.ai.frontlineDurability; }
 
   isEnemy(other) { return other.team !== this.team; }
 

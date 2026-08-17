@@ -87,7 +87,6 @@ const SHAPE_LABELS = {
   meleeCone: 'Melee cone', meleeAoe: 'Melee AOE',
 };
 const RULE_LABELS = { lowestHp: 'Lowest HP', highestHp: 'Highest HP', closest: 'Closest', strongest: 'Strongest', weakest: 'Weakest', mostAtOnce: 'Most at once', threatened: 'Threatened' };
-const PERSONALITIES = ['stoic', 'cocky', 'cautious', 'cheerful', 'grumpy', 'nervous', 'chatty'];
 
 // Plain-language explanations for every buildable keyword. Keyed by the id
 // used in the vocab arrays; surfaced as native option tooltips (hover the
@@ -182,9 +181,8 @@ function memberCard(m) {
           <select class="mtrule">${optionList('trule', TARGET_RULES, ['Lowest HP', 'Highest HP', 'Closest', 'Strongest', 'Weakest', 'Most at once', 'Threatened'], m.target.rule, TARGET_RULES.map(r => keywordTip(r)))}</select>
         </div>
 
-        <div class="chip move" title="Personality">
+        <div class="chip move" title="Leader">
           <span class="chip-emoji">🧠</span>
-          <select class="mpersonality" title="Personality">${optionList('personality', PERSONALITIES, ['Stoic', 'Cocky', 'Cautious', 'Cheerful', 'Grumpy', 'Nervous'], m.personality)}</select>
           <label class="leader-toggle"><input class="mleaderchk" type="checkbox" ${m.leader ? 'checked' : ''} /> Leader</label>
         </div>
 
@@ -253,7 +251,6 @@ function readMembers() {
       selfPreservation: Array.from(card.querySelectorAll('.mod-chips .chip.sp')).map(c => c.dataset.sp),
       target: { side: str('.mtside'), rule: str('.mtrule') },
       leader: card.querySelector('.mleaderchk').checked,
-      personality: str('.mpersonality') || 'stoic',
       confidence: num('.mconfidence'),
     });
   });
@@ -279,7 +276,6 @@ function addMember() {
     selfPreservation: [],
     target: { side: 'enemy', rule: 'closest' },
     leader: false,
-    personality: 'stoic',
     confidence: 0.5,
   };
   sim.members.push(m);
@@ -416,22 +412,6 @@ customizerEl.addEventListener('change', (e) => {
   if (e.target.matches('.matktype, .matkshape')) {
     const card = e.target.closest('.mcard');
     if (card) updateCardSummary(card);
-  }
-});
-
-// Live-update member changes as inputs are dragged (e.g. personality) write
-// straight back to the member def and any live unit.
-customizerEl.addEventListener('input', (e) => {
-  if (e.target.matches('.mpersonality')) {
-    const card = e.target.closest('.mcard');
-    if (!card) return;
-    const id = card.dataset.id;
-    const val = e.target.value;
-    const member = sim.members.find(m => m.id === id);
-    if (member) member.personality = val;
-    for (const u of sim.playerUnits) {
-      if (u.def.id === id) u.personality = val;
-    }
   }
 });
 

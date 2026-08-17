@@ -32,6 +32,7 @@ export class Renderer {
     this.showSafety = true;     // yellow safety-direction arrows
     this.showTargets = true;    // dashed lines to attack targets
     this.showIntent = true;     // intent text above units
+    this.showDecision = true;   // utility-AI score breakdown (player only)
     this._resize();
     window.addEventListener('resize', () => this._resize());
     // Re-fit whenever the canvas element's layout size changes (e.g. the
@@ -288,6 +289,34 @@ export class Renderer {
         ctx.fillRect(p.x - tw / 2 - 3, p.y - 22, tw + 6, 14);
         ctx.fillStyle = u.team === 'player' ? '#fbbf24' : '#f87171';
         ctx.fillText(u.intent, p.x, p.y - 11);
+      }
+
+      // Decision breakdown (player only): the utility-AI score for each
+      // candidate action, so you can see WHY the member acted. The winner is
+      // highlighted; the reason string explains the top contributing signal.
+      if (this.showDecision && u.team === 'player' && u.decision) {
+        const d = u.decision;
+        const lines = d.candidates.map(c => {
+          const mark = c.name === d.action ? '▶' : ' ';
+          return `${mark}${c.name} ${c.score.toFixed(2)}`;
+        });
+        lines.push(`  ${d.reason}`);
+        ctx.font = '10px monospace';
+        ctx.textAlign = 'left';
+        const boxW = 120;
+        const lineH = 12;
+        const boxH = lines.length * lineH + 4;
+        const bx = p.x + u.size * this.scale / 2 + 4;
+        const by = p.y - 22;
+        ctx.fillStyle = 'rgba(0,0,0,0.65)';
+        ctx.fillRect(bx, by, boxW, boxH);
+        ctx.fillStyle = '#e2e8f0';
+        lines.forEach((ln, i) => {
+          const isWinner = ln.startsWith('▶');
+          if (isWinner) ctx.fillStyle = '#4ade80';
+          ctx.fillText(ln, bx + 4, by + 12 + i * lineH);
+          if (isWinner) ctx.fillStyle = '#e2e8f0';
+        });
       }
     }
 

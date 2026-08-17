@@ -21,7 +21,7 @@ export function startingHero() {
     modifiers: ['peel'],
     selfPreservation: [],
     target: { side: 'enemy', rule: 'closest' },
-    movement: 'advance', leader: true, personality: 'stoic', confidence: 0.8, stamina: { max: 140, regen: 8 },
+    movement: 'advance', leader: true, confidence: 0.8, stamina: { max: 140, regen: 8 },
     runs: 0, wins: 0,
   };
 }
@@ -103,7 +103,6 @@ export function rollTavernRecruits(count) {
   const rules = ['lowestHp', 'highestHp', 'closest', 'strongest', 'weakest', 'mostAtOnce', 'threatened'];
   const modPool = ['taunt', 'lifesteal', 'pierce', 'slow', 'peel', 'evasive', 'burn', 'stun', 'thorns', 'execute'];
   const spPool = ['hide', 'seekHeal'];
-  const personalities = ['stoic', 'cocky', 'cautious', 'cheerful', 'grumpy', 'nervous', 'chatty'];
 
   for (let i = 0; i < count; i++) {
     const type = atkTypes[Math.floor(Math.random() * atkTypes.length)];
@@ -136,7 +135,6 @@ export function rollTavernRecruits(count) {
       selfPreservation: sp,
       target: { side: (support && type !== 'taunt' && type !== 'summon') ? 'ally' : 'enemy', rule: rules[Math.floor(Math.random() * rules.length)] },
       leader: false,
-      personality: personalities[Math.floor(Math.random() * personalities.length)],
       confidence: Math.round((0.2 + Math.random() * 0.7) * 100) / 100,
       stamina: { max: 60 + Math.floor(Math.random() * 80), regen: 6 + Math.floor(Math.random() * 14) },
       runs: 0, wins: 0,

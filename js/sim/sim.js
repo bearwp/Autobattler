@@ -3,7 +3,7 @@
 
 import { CONFIG } from './config.js';
 import { Grid } from './grid.js';
-import { Unit, pickTarget, nearestEnemy, threatenedEnemy, lowestHpAlly } from './unit.js';
+import { Unit, pickTarget, nearestEnemy, threatenedEnemy } from './unit.js';
 import { dist, len, norm, sub, add, scale, dot, clampLen, clamp } from './vec.js';
 import { completeRun, rollTavernRecruits, salaryOf } from '../meta.js';
 
@@ -281,8 +281,6 @@ export class Sim {
     const atkShapes = ['rangeOneShot', 'rangeAoe', 'meleeOneShot', 'meleeCone', 'meleeAoe'];
     const rules = ['lowestHp', 'highestHp', 'closest', 'strongest', 'weakest', 'mostAtOnce', 'threatened'];    const modPool = ['taunt', 'lifesteal', 'pierce', 'slow', 'peel', 'evasive', 'burn', 'stun', 'thorns', 'execute'];
     const spPool = ['hide', 'seekHeal'];
-    const personalities = ['stoic', 'cocky', 'cautious', 'cheerful', 'grumpy', 'nervous', 'chatty'];
-
     const type = atkTypes[Math.floor(Math.random() * atkTypes.length)];
     const shape = atkShapes[Math.floor(Math.random() * atkShapes.length)];
     const mods = [];
@@ -314,7 +312,6 @@ export class Sim {
       selfPreservation: sp,
       target: { side: (support && type !== 'taunt' && type !== 'summon') ? 'ally' : 'enemy', rule: rules[Math.floor(Math.random() * rules.length)] },
       leader: false,
-      personality: personalities[Math.floor(Math.random() * personalities.length)],
       // Composure (base confidence) and stamina pool are per-member traits, so
       // random recruits vary: a brave skirmisher with high regen, or a nervous
       // tank with a deep but slow-refilling pool.
@@ -1136,19 +1133,12 @@ export class Sim {
       return;
     }
 
-    // Movement decision.
-    this._applyMovement(u, target, enemies, allies, dt);
-
-    // Peel: units with the peel modifier rush to defend squishy allies.
-    this._peelForAllies(u, enemies, allies, dt);
-
-    // Self-preservation: situational overrides (hide / seek heal) that take
-    // priority over the normal movement decided above.
-    this._selfPreservation(u, enemies, allies, dt);
-
-    // Confidence-driven safety: a shaken member retreats toward the healer,
-    // tank, and away from threats instead of fighting.
-    this._seekSafety(u, target, enemies, allies, dt);
+    // Unified per-frame decision: score candidate actions (retreat / peel /
+    // goal / hold / advance) and execute the highest. This replaces the old
+    // cascade of competing overrides (survival, peel, self-preservation,
+    // seek-safety) with a single decision, so the final action is the one the
+    // member most wants, not whichever override happened to run last.
+    this._decide(u, target, enemies, allies, dt);
 
     // Resolve attacks (primary + universal secondary).
     this._resolveAttacks(u, target, enemies, allies);
@@ -1316,9 +1306,9 @@ export class Sim {
     const ec = CONFIG.intel; // emergent coordination weights live under intel
     // Durability: effective hit points (HP + armor scaled). A durable member
     // is a front-liner that can absorb hits, so it steps up to engage; a
-    // fragile one hangs back. This replaces the old hard-coded `tankArmor`
-    // role threshold with a real quantity.
-    const durable = (a) => a.hp + a.armor * 10 >= 200;
+    // fragile one hangs back. Uses the shared durability helper so every AI
+    // layer agrees on who is "tanky."
+    const durable = (a) => a.isFrontline;
     const isDurable = durable(u);
     // Is any durable ally (other than me) currently engaging a given enemy?
     // "Engaging" means it has that enemy as its target. Used to make fragile
@@ -1414,172 +1404,6 @@ export class Sim {
     }
 
     return best || target;
-  }
-
-  // A unit with the 'peel' modifier abandons its own target to engage an
-  // enemy that is menacing a squishy ally, shielding the back line. It prefers
-  // the ally it is most bonded with.
-  _peelForAllies(u, enemies, allies, dt) {
-    if (!u.modifiers.includes('peel')) return;
-    const t = CONFIG.team;
-
-    // Find the best squishy ally to defend: highest bond, then most hurt.
-    let best = null, bestScore = -Infinity;
-    for (const a of allies) {
-      if (a === u || !a.alive) continue;
-      const squishy = a.armor <= 0 || a.hp < a.maxHp * 0.5;
-      if (!squishy) continue;
-      const threat = nearestEnemy(a, enemies);
-      if (!threat) continue;
-      if (dist(a.pos, threat.pos) > t.protectRadius) continue;
-      if (dist(u.pos, threat.pos) > t.protectEngageRange) continue;
-      const score = this._getBond(u, a) * CONFIG.synergy.protectBias + (a.maxHp - a.hp);
-      if (score > bestScore) { bestScore = score; best = a; }
-    }
-    if (!best) return;
-
-    const threat = nearestEnemy(best, enemies);
-    // Peel: move toward the enemy menacing the ally.
-    this._intent(u, 'peeling for ally');
-    this._moveTo(u, threat.pos, { chase: true }, dt);
-    this._separate(u, allies, dt);
-    // Defending an ally strengthens the bond with them.
-    this._growBond(u, best, CONFIG.synergy.peelBond);
-  }
-
-  // Self-preservation instincts. These override the normal movement decided in
-  // _applyMovement. Priority: seek healing (most urgent) > hide behind a
-  // protector. Each only fires while its trigger holds, with hysteresis so the
-  // unit doesn't flip-flop at the threshold.
-  _selfPreservation(u, enemies, allies, dt) {
-    const sp = u.selfPreservation;
-    if (sp.length === 0) return;
-    const t = CONFIG.team;
-    // While fleeing/hiding the member still fights anything in reach, so pick
-    // a target by its own rule (enemy for attackers, ally for healers). Ally
-    // support types never pick themselves.
-    const side = u.targetRule && u.targetRule.side;
-    const type = u.attack.type;
-    let target;
-    if (type === 'heal') target = this._healTarget(u, allies);
-    else if (type === 'shield') target = this._shieldTarget(u, allies);
-    else if (type === 'mana' || type === 'buff') target = this._supportTarget(u, allies);
-    else {
-      const candidates = side === 'ally' ? allies : enemies;
-      target = pickTarget(u, candidates, u.attack.range);
-    }
-
-    // Universal: critically low HP retreats toward the team, regardless of
-    // confidence or modifiers. Only fights enemies already in reach.
-    const hpFrac = u.hp / u.maxHp;
-    if (hpFrac < 0.25) {
-      const cluster = this._teamCluster(u, allies);
-      if (cluster) {
-        this._intent(u, 'retreating (critically hurt)');
-        this._moveTo(u, cluster, { chase: true }, dt);
-        this._separate(u, allies, dt);
-        this._resolveAttacks(u, target, enemies, allies);
-        return;
-      }
-    }
-
-    // Seek heal: run to the healer while badly hurt.
-    if (sp.includes('seekHeal')) {
-      const hpFrac = u.hp / u.maxHp;
-      const threshold = t.healSeekThreshold;
-      const active = u.seekingHeal || hpFrac < threshold;
-      if (active && hpFrac < threshold + t.healSeekHysteresis) {
-        if (!u.seekingHeal) {
-          // Just started seeking healing: speak up.
-          this._say(u, 'seekingHeal');
-        }
-        u.seekingHeal = true;
-        const healer = allies.find(a => a.alive && a !== u && a.attack && a.attack.type === 'heal');
-        if (healer) {
-          this._intent(u, 'seeking healer');
-          this._moveTo(u, healer.pos, { chase: true }, dt);
-          this._separate(u, allies, dt);
-          this._resolveAttacks(u, target, enemies, allies);
-          return;
-        }
-      } else {
-        u.seekingHeal = false;
-      }
-    }
-
-    // Hide: retreat behind the tankiest ally when an enemy is close.
-    if (sp.includes('hide')) {
-      const threat = nearestEnemy(u, enemies);
-      if (threat && dist(u.pos, threat.pos) < t.hideThreatRange) {
-        const protector = this._pickProtector(u, allies);
-        if (protector) {
-          const away = norm(sub(protector.pos, threat.pos));
-          const spot = add(protector.pos, scale(away, t.hideOffset));
-          this._intent(u, 'hiding behind ally');
-          this._moveTo(u, spot, {}, dt);
-          this._separate(u, allies, dt);
-          this._resolveAttacks(u, target, enemies, allies);
-          return;
-        }
-      }
-    }
-  }
-
-  // A shaken member (low confidence) seeks safety instead of fighting. It
-  // blends several instincts into one weighted direction: pull away from the
-  // nearest threat, toward the healer, toward the tankiest ally, and away
-  // from nearby enemies (spacing). This is driven by the same confidence
-  // attribute as the avoid decision, so a beaten-down member naturally
-  // retreats to safety while a confident one keeps fighting. Runs after the
-  // urgent self-preservation instincts (seek heal / hide) so those win.
-  _seekSafety(u, target, enemies, allies, dt) {
-    const cf = CONFIG.confidence;
-    // A shaken member gives up sooner, a confident one keeps fighting. The
-    // per-member difference comes purely from the dynamic confidence value
-    // (each member has its own composure base), so the seek-safety trigger is
-    // simply "confidence below the safety threshold."
-    const effThreshold = cf.safetyThreshold;
-    const active = u.seekingSafety || u.confidence < effThreshold;
-    if (!active || u.confidence >= effThreshold + cf.safetyHysteresis) {
-      u.seekingSafety = false;
-      return;
-    }
-    u.seekingSafety = true;
-
-    // Confidence steadies over time while fleeing, so a shaken unit
-    // gradually regains its nerve instead of cowering forever. There is no
-    // cap at baseConfidence here: everyone can climb back out of the shaken
-    // band (a nervous unit just recovers slower via its baseConfidence-scaled
-    // rate), so no member is ever permanently stuck in seek-safety.
-    const rateScale = cf.recoverScale * (0.5 + u.baseConfidence);
-    u.confidence = clamp(u.confidence + cf.safetyRecover * rateScale * dt, cf.min, cf.max);
-
-    // If an enemy is in attack range, attack it — but keep fleeing, don't
-    // move toward it. _resolveAttacks fires the attack; the retreat below
-    // keeps the unit backing off.
-    const threat = nearestEnemy(u, enemies);
-    const inRange = threat && dist(u.pos, threat.pos) <= u.attack.range;
-
-    // Reached safety: near the team cluster and no enemy close. Reward the
-    // successful retreat with a confidence boost so the member steadies and
-    // rejoins the fight instead of cowering forever.
-    const cluster = this._teamCluster(u, allies);
-    const nearTeam = cluster && dist(u.pos, cluster) <= cf.safetyGainRadius;
-    const noThreat = !threat || dist(u.pos, threat.pos) > cf.pressureRadius;
-    if (nearTeam && noThreat) {
-      u.confidence = clamp(u.confidence + cf.safetyGain, cf.min, cf.max);
-      this._intent(u, 'regaining composure');
-      return;
-    }
-
-    const dir = this._safetyDirection(u, enemies, allies);
-    if (dir.x === 0 && dir.y === 0) return;
-    this._intent(u, 'seeking safety (shaken)');
-    // Sprint toward safety while stamina lasts.
-    this._sprint(u, norm(dir), dt);
-    this._separate(u, allies, dt);
-    // Attack any enemy in reach while backing off.
-    if (inRange) this._resolveAttacks(u, target, enemies, allies);
   }
 
   // The single, reusable "where is safe?" direction. Blends several instincts
@@ -1693,62 +1517,272 @@ export class Sim {
     let best = null, bestScore = -Infinity;
     for (const a of allies) {
       if (a === u || !a.alive) continue;
-      const score = a.armor * 10 + a.maxHp;
+      const score = a.durability;
       if (score > bestScore) { bestScore = score; best = a; }
     }
     if (best) return best;
     return this.playerUnits.find(a => a.alive && a.isLeader) || null;
   }
 
-  _applyMovement(u, target, enemies, allies, dt) {
-    const mv = CONFIG.movement;
+  // Unified per-frame decision (utility AI). Scores a small set of candidate
+  // actions and executes the highest-scoring one. Each candidate is a pure
+  // function returning { score, reason } (and, for the goal candidate, the
+  // goal to act on). The winner is executed; the score breakdown is stored on
+  // the unit for the debug overlay so you can see WHY it acted.
+  //
+  // Candidates, in priority order of their base weights:
+  //   retreat  - flee to safety (hurt / shaken / threatened / outnumbered)
+  //   peel     - rush to defend a squishy ally (peel modifier only)
+  //   goal     - act on the kit-derived goal (support / taunt / engage)
+  //   hold     - keep distance from the goal when commitment is low
+  //   advance  - no goal, head toward the exit / formation
+  //
+  // A small stickiness bonus to the previously chosen action prevents
+  // oscillation at score boundaries.
+  _decide(u, target, enemies, allies, dt) {
+    const ai = CONFIG.ai;
+    const candidates = [];
 
-    // --- Layer 1: Universal survival ---
-    // Everyone, regardless of role, backs off the enemy currently hunting
-    // them (highest threat) when it gets too close. This is the "evade to
-    // survive" instinct that applies to every member. It does NOT decide
-    // engagement — that's the goal layer. A healer backs off its attacker
-    // while still moving toward the hurt ally.
+    // Retreat: how urgent is it to back off right now?
+    const retreat = this._retreatScore(u, enemies, allies);
+    candidates.push({ name: 'retreat', ...retreat });
+
+    // Peel: only members with the peel modifier defend squishy allies.
+    if (u.modifiers.includes('peel')) {
+      const peel = this._peelScore(u, enemies, allies);
+      candidates.push({ name: 'peel', ...peel });
+    }
+
+    // Goal: act on the kit-derived goal (support / taunt / engage).
+    const goal = this._goalScore(u, target, enemies, allies);
+    candidates.push({ name: 'goal', ...goal });
+
+    // Hold: keep distance from the goal when commitment is low.
+    const commit = this._commitment(u, enemies, allies);
+    candidates.push({ name: 'hold', score: ai.hold.base, reason: 'cautious' });
+
+    // Advance: no goal, head toward the exit / formation. When the room is
+    // clear (no enemies left) this is the natural next step, so it scores
+    // above hold and the team walks to the door instead of idling in place.
+    const enemiesLeft = enemies.some(e => e.alive);
+    const advanceScore = enemiesLeft ? ai.advance.base : ai.advance.clearRoom;
+    candidates.push({ name: 'advance', score: advanceScore, reason: enemiesLeft ? 'no goal' : 'room clear' });
+
+    // Stickiness: prefer the previously chosen action so the member doesn't
+    // flip between actions every frame at a score boundary.
+    for (const c of candidates) {
+      if (c.name === u.lastAction) c.score += ai.stickiness;
+    }
+
+    // Pick the highest-scoring candidate.
+    let best = candidates[0];
+    for (const c of candidates) {
+      if (c.score > best.score) best = c;
+    }
+    u.lastAction = best.name;
+    u.decision = { action: best.name, score: best.score, reason: best.reason, candidates };
+
+    // Execute the winner.
+    switch (best.name) {
+      case 'retreat': this._doRetreat(u, target, enemies, allies, dt); break;
+      case 'peel': this._doPeel(u, enemies, allies, dt); break;
+      case 'goal': this._doGoal(u, goal.goal, target, enemies, allies, dt); break;
+      case 'hold': this._doHold(u, goal.goal, enemies, allies, dt); break;
+      case 'advance': this._doAdvance(u, enemies, allies, dt); break;
+    }
+  }
+
+  // Retreat urgency: how much does this member want to back off right now?
+  // Blends hurt, shaken confidence, a close hunter, being outnumbered, and the
+  // member's own self-preservation instincts (seekHeal / hide). This subsumes
+  // the old critically-hurt / seek-heal / hide / seek-safety / evade-hunter
+  // overrides into one score.
+  _retreatScore(u, enemies, allies) {
+    const ai = CONFIG.ai.retreat;
+    const cf = CONFIG.confidence;
+    const t = CONFIG.team;
+    let score = 0;
+    const parts = [];
+
+    // Retreat means fleeing danger. With no enemies alive there is nothing to
+    // flee from, so a hurt or shaken member recovers in place instead of
+    // backing off forever after the room clears.
+    if (!enemies.some(e => e.alive)) return { score: 0, reason: 'no danger' };
+
+    const hpFrac = u.hp / u.maxHp;
+    if (hpFrac < ai.hurtThreshold) {
+      score += ai.hurtWeight * (1 - hpFrac / ai.hurtThreshold);
+      parts.push(`hurt ${(1 - hpFrac).toFixed(2)}`);
+    }
+
+    if (u.confidence < cf.safetyThreshold) {
+      score += ai.shakenWeight;
+      parts.push('shaken');
+    }
+
     const hunter = threatenedEnemy(u, enemies);
-    // Only back off if the hunter is close but NOT already in attack range.
-    // If the member can hit it, it stands and fights — otherwise a ranged
-    // unit would flee from a target it's already in range of, bouncing
-    // between evading and attacking every frame.
     const hunterInRange = hunter && dist(u.pos, hunter.pos) <= u.attack.range;
-    if (hunter && !hunterInRange && dist(u.pos, hunter.pos) < mv.survivalDistance - mv.survivalHysteresis) {
-      this._intent(u, 'evading hunter');
-      this._say(u, 'avoiding', hunter);
-      this._dropConfidence(u, CONFIG.confidence.avoidDrop);
-      const dir = this._safetyDirection(u, enemies, allies);
-      this._sprint(u, norm(dir), dt);
-      this._separate(u, allies, dt);
-      // Keep fighting while backing off: if a target is in reach, attack it.
-      this._resolveAttacks(u, target, enemies, allies);
+    if (hunter && !hunterInRange && dist(u.pos, hunter.pos) < CONFIG.movement.survivalDistance - CONFIG.movement.survivalHysteresis) {
+      score += ai.hunterWeight;
+      parts.push('hunter');
+    }
+
+    // Outnumbered: more enemies than allies nearby.
+    const swarm = enemies.filter(e => dist(u.pos, e.pos) <= CONFIG.intel.swarmRadius).length;
+    if (swarm >= CONFIG.intel.swarmCount) {
+      score += ai.outnumberWeight;
+      parts.push('outnumbered');
+    }
+
+    // Self-preservation instincts.
+    const sp = u.selfPreservation;
+    if (sp.includes('seekHeal') && hpFrac < t.healSeekThreshold) {
+      score += ai.seekHealWeight;
+      parts.push('seekHeal');
+    }
+    if (sp.includes('hide')) {
+      const threat = nearestEnemy(u, enemies);
+      if (threat && dist(u.pos, threat.pos) < t.hideThreatRange) {
+        score += ai.hideWeight;
+        parts.push('hide');
+      }
+    }
+
+    return { score, reason: parts.join(', ') || 'safe' };
+  }
+
+  // Peel urgency: how much does a squishy ally need defending right now?
+  // Only called for members with the peel modifier. Returns a low score when
+  // no ally is in danger.
+  _peelScore(u, enemies, allies) {
+    const ai = CONFIG.ai.peel;
+    const t = CONFIG.team;
+    let best = null, bestScore = -Infinity;
+    for (const a of allies) {
+      if (a === u || !a.alive) continue;
+      const squishy = a.armor <= 0 || a.hp < a.maxHp * 0.5;
+      if (!squishy) continue;
+      const threat = nearestEnemy(a, enemies);
+      if (!threat) continue;
+      if (dist(a.pos, threat.pos) > t.protectRadius) continue;
+      if (dist(u.pos, threat.pos) > t.protectEngageRange) continue;
+      const score = ai.base + ai.threatWeight * (1 - a.hp / a.maxHp);
+      if (score > bestScore) { bestScore = score; best = a; }
+    }
+    if (!best) return { score: 0, reason: 'no ally in danger' };
+    return { score: bestScore, reason: `defend ${best.displayName}`, ally: best };
+  }
+
+  // Goal urgency: how much does the kit-derived goal need acting on right now?
+  // Support types score by how much the ally needs the cast; damage/taunt
+  // types score by commitment (confidence + durability + backup). Returns the
+  // goal (from _kitGoal) alongside the score so the winner can act on it.
+  _goalScore(u, target, enemies, allies) {
+    const ai = CONFIG.ai.goal;
+    const goal = this._kitGoal(u, target, enemies, allies);
+    if (!goal) return { score: 0, reason: 'no goal', goal: null };
+
+    const type = u.attack.type;
+    let score;
+    if (type === 'heal' || type === 'shield' || type === 'buff' || type === 'mana') {
+      // Support: score by how much the ally needs the cast.
+      score = ai.supportBase + ai.needWeight * (goal.urgency ?? 0);
+    } else {
+      // Damage / taunt: score by commitment (how hard the member pushes).
+      const commit = this._commitment(u, enemies, allies);
+      score = ai.engageBase + ai.commitWeight * commit;
+    }
+    return { score, reason: goal.intent, goal };
+  }
+
+  // Execute a retreat: flee toward safety using the shared safety direction.
+  // The member still fights anything already in reach while backing off.
+  _doRetreat(u, target, enemies, allies, dt) {
+    const cf = CONFIG.confidence;
+    // Confidence steadies over time while fleeing, so a shaken unit gradually
+    // regains its nerve instead of cowering forever.
+    const rateScale = cf.recoverScale * (0.5 + u.baseConfidence);
+    u.confidence = clamp(u.confidence + cf.safetyRecover * rateScale * dt, cf.min, cf.max);
+
+    const threat = nearestEnemy(u, enemies);
+    const inRange = threat && dist(u.pos, threat.pos) <= u.attack.range;
+
+    // Reached safety: near the team cluster and no enemy close. Reward the
+    // successful retreat with a confidence boost so the member steadies and
+    // rejoins the fight instead of cowering forever.
+    const cluster = this._teamCluster(u, allies);
+    const nearTeam = cluster && dist(u.pos, cluster) <= cf.safetyGainRadius;
+    const noThreat = !threat || dist(u.pos, threat.pos) > cf.pressureRadius;
+    if (nearTeam && noThreat) {
+      u.confidence = clamp(u.confidence + cf.safetyGain, cf.min, cf.max);
+      this._intent(u, 'regaining composure');
       return;
     }
 
-    // --- Layer 2: Kit-derived goal ---
-    // What does this member's kit want it to do right now? The attack type
-    // drives the goal, so it can never drift out of sync with the build.
-    const goal = this._kitGoal(u, target, enemies, allies);
+    const dir = this._safetyDirection(u, enemies, allies);
+    if (dir.x === 0 && dir.y === 0) return;
+    this._intent(u, 'retreating');
+    this._sprint(u, norm(dir), dt);
+    this._separate(u, allies, dt);
+    // Attack any enemy in reach while backing off.
+    if (inRange) this._resolveAttacks(u, target, enemies, allies);
+  }
 
-    // --- Layer 3: Emergent commitment ---
-    // How hard does this member push toward its goal? Confidence and
-    // durability, not class labels, decide. A fragile, shaken member hangs
-    // back; a durable, confident one commits.
+  // Execute a peel: move toward the enemy menacing the squishy ally.
+  _doPeel(u, enemies, allies, dt) {
+    const peel = this._peelScore(u, enemies, allies);
+    if (!peel.ally) return;
+    const threat = nearestEnemy(peel.ally, enemies);
+    if (!threat) return;
+    this._intent(u, 'peeling for ally');
+    this._moveTo(u, threat.pos, { chase: true }, dt);
+    this._separate(u, allies, dt);
+    // Defending an ally strengthens the bond with them.
+    this._growBond(u, peel.ally, CONFIG.synergy.peelBond);
+  }
+
+  // Execute the kit-derived goal: move toward / act on the goal.
+  _doGoal(u, goal, target, enemies, allies, dt) {
+    if (!goal) return;
+    const mv = CONFIG.movement;
     const commit = this._commitment(u, enemies, allies);
 
-    if (!goal) {
-      // No goal (e.g. no enemies and no hurt ally): advance or idle.
-      this._intent(u, 'advancing into combat');
-      const adv = this._advanceGoal(u);
-      this._moveTo(u, adv.pos, { follow: adv.leader, standoff: CONFIG.team.followDistance }, dt);
+    // In range of the goal: hold and act.
+    if (dist(u.pos, goal.pos) <= mv.goalRange) {
+      this._intent(u, goal.intent);
+      u.vel = { x: 0, y: 0 };
+      return;
+    }
+
+    // Low commitment: approach cautiously instead of pushing in.
+    if (commit < mv.commitFloor) {
+      this._intent(u, 'approaching cautiously');
+      this._moveTo(u, goal.pos, {}, dt);
       this._separate(u, allies, dt);
       return;
     }
 
-    // Low commitment: hold at range from the goal instead of pushing in.
-    if (commit < mv.commitFloor) {
+    // High commitment: close on the goal. Support units match the ally's
+    // speed; others sprint to close.
+    this._intent(u, goal.intent);
+    const urgency = goal.urgency ?? 1;
+    const blend = clamp(commit * 0.5 + urgency * 0.5, 0, 1);
+    if (goal.ally && goal.ally.alive) {
+      this._moveTo(u, goal.ally.pos, {
+        follow: goal.ally,
+        standoff: u.attack.range * 0.5,
+        chase: true,
+      }, dt);
+    } else {
+      this._moveTo(u, goal.pos, { chase: true }, dt);
+    }
+    this._separate(u, allies, dt);
+  }
+
+  // Execute a hold: keep distance from the goal (cautious) or idle.
+  _doHold(u, goal, enemies, allies, dt) {
+    const mv = CONFIG.movement;
+    if (goal && goal.pos) {
       const d = dist(u.pos, goal.pos);
       if (d < mv.holdRange) {
         this._intent(u, 'holding at range (cautious)');
@@ -1761,44 +1795,17 @@ export class Sim {
       this._separate(u, allies, dt);
       return;
     }
+    // No goal: idle in place.
+    this._intent(u, 'holding position');
+    this._idleWander(u, dt);
+    this._separate(u, allies, dt);
+  }
 
-    // In range of the goal: hold and act.
-    if (dist(u.pos, goal.pos) <= mv.goalRange) {
-      this._intent(u, goal.intent);
-      u.vel = { x: 0, y: 0 };
-      return;
-    }
-
-    // High commitment: close on the goal. The speed is a walk/sprint blend
-    // driven by urgency (how much the goal needs the member right now) and
-    // commitment (how hard the member pushes). A support unit sprints to
-    // close on its ally, then matches the ally's speed so it stays in range
-    // without overshooting or trailing behind.
-    this._intent(u, goal.intent);
-    const urgency = goal.urgency ?? 1;
-    const blend = clamp(commit * 0.5 + urgency * 0.5, 0, 1);
-    if (goal.ally && goal.ally.alive) {
-      // Sprint to close the gap, then match the ally's velocity so the
-      // support unit keeps pace with a moving ally. Closing speed eases off
-      // continuously as the unit nears the standoff distance (arrival
-      // easing), so it decelerates smoothly into position instead of coming
-      // to a hard stop, jittering, and re-sprinting. Stamina is drained only
-      // in proportion to how much faster than normal the unit is moving.
-      // Movement routes through _moveTo so it pathfinds around obstacles like
-      // every other movement, sprints to close, then matches the ally's speed.
-      this._moveTo(u, goal.ally.pos, {
-        follow: goal.ally,
-        standoff: u.attack.range * 0.5,
-        chase: true,
-      }, dt);
-    } else if (blend >= mv.sprintCommit) {
-      // High commitment: sprint to close on the goal. Unified through _moveTo
-      // so it gains speed when far, eases off when close, and drains stamina
-      // only for the portion above baseline.
-      this._moveTo(u, goal.pos, { chase: true }, dt);
-    } else {
-      this._moveTo(u, goal.pos, { chase: true }, dt);
-    }
+  // Execute an advance: head toward the exit / formation (no enemies left).
+  _doAdvance(u, enemies, allies, dt) {
+    this._intent(u, 'advancing into combat');
+    const adv = this._advanceGoal(u);
+    this._moveTo(u, adv.pos, { follow: adv.leader, standoff: CONFIG.team.followDistance }, dt);
     this._separate(u, allies, dt);
   }
 
@@ -1835,6 +1842,12 @@ export class Sim {
         }
         return { pos: add(u.pos, scale(dir, desired)), intent: label, urgency, ally };
       }
+      // No ally needs a cast right now: engage the nearest enemy instead of
+      // idling. A support unit with nothing to heal/shield/buff should fight
+      // (or at least close distance), not stand around — this matches the
+      // intent stated in the target helpers.
+      const near = nearestEnemy(u, enemies);
+      if (near) return { pos: near.pos, intent: 'advancing on target' };
       return null;
     }
 
@@ -1876,8 +1889,7 @@ export class Sim {
 
     // Durability: effective hit points (HP + armor scaled) relative to a
     // baseline. A tanky member is built to absorb, so it commits harder.
-    const dur = u.hp + u.armor * 10;
-    const durFrac = clamp(dur / 200, 0, 1);
+    const durFrac = clamp(u.durability / CONFIG.ai.frontlineDurability, 0, 1);
 
     // Backup: nearby allies steady the member (reuse the confidence backup).
     let backup = 0;
@@ -2890,13 +2902,8 @@ export class Sim {
     if (u.speakCooldown > 0) return;
     if (this.time < this._nextBubbleAt) return;
     const d = CONFIG.dialogue;
-    // Chatty members speak more readily; quiet personalities hold back.
-    const talk = u.personality === 'chatty' ? 1.6 : (u.personality === 'stoic' || u.personality === 'grumpy' ? 0.5 : 1);
-    if (Math.random() > d.chance * talk) return;
-    // Prefer the speaker's personality take on this situation; fall back to
-    // the generic pool so every situation still has a line.
-    const persona = d.lines.personality && d.lines.personality[u.personality];
-    const pool = (persona && persona[key]) || d.lines[key] || d.lines.idle;
+    if (Math.random() > d.chance) return;
+    const pool = d.lines[key] || d.lines.idle;
     if (pool.length === 0) return;
     const line = pool[Math.floor(Math.random() * pool.length)]
       .replace(/\{name\}/g, u.displayName)

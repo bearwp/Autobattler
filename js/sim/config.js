@@ -80,7 +80,7 @@ export const CONFIG = {
       modifiers: ['peel'],
       selfPreservation: [],
       target: { side: 'enemy', rule: 'closest' },
-      movement: 'advance', leader: true, personality: 'stoic',
+      movement: 'advance', leader: true,
       confidence: 0.8, stamina: { max: 140, regen: 8 },
     },
     {
@@ -90,7 +90,7 @@ export const CONFIG = {
       modifiers: ['lifesteal'],
       selfPreservation: [],
       target: { side: 'enemy', rule: 'closest' },
-      movement: 'charge', leader: false, personality: 'cocky',
+      movement: 'charge', leader: false,
       confidence: 0.7,
     },
     {
@@ -100,7 +100,7 @@ export const CONFIG = {
       modifiers: ['pierce'],
       selfPreservation: ['hide'],
       target: { side: 'enemy', rule: 'lowestHp' },
-      movement: 'kite', leader: false, personality: 'cautious',
+      movement: 'kite', leader: false,
       confidence: 0.45, stamina: { max: 100, regen: 18 },
     },
     {
@@ -110,7 +110,7 @@ export const CONFIG = {
       modifiers: [],
       selfPreservation: ['hide'],
       target: { side: 'ally', rule: 'lowestHp' },
-      movement: 'keepDistance', leader: false, personality: 'cheerful',
+      movement: 'keepDistance', leader: false,
       confidence: 0.5,
     },
   ],
@@ -128,7 +128,7 @@ export const CONFIG = {
       modifiers: ['peel'],
       selfPreservation: [],
       target: { side: 'enemy', rule: 'closest' },
-      movement: 'advance', leader: true, personality: 'stoic', confidence: 0.8, stamina: { max: 140, regen: 8 },
+      movement: 'advance', leader: true, confidence: 0.8, stamina: { max: 140, regen: 8 },
     },
     {
       id: 'r-soldier', name: 'Vanguard', role: 'Bruiser', color: '#ef4444', shape: 'square',
@@ -138,7 +138,7 @@ export const CONFIG = {
       modifiers: ['lifesteal'],
       selfPreservation: [],
       target: { side: 'enemy', rule: 'closest' },
-      movement: 'charge', leader: false, personality: 'cocky', confidence: 0.7,
+      movement: 'charge', leader: false, confidence: 0.7,
     },
     {
       id: 'r-archer', name: 'Ranger', role: 'Ranged', color: '#22c55e', shape: 'triangle',
@@ -148,7 +148,7 @@ export const CONFIG = {
       modifiers: ['pierce'],
       selfPreservation: ['hide'],
       target: { side: 'enemy', rule: 'lowestHp' },
-      movement: 'kite', leader: false, personality: 'cautious', confidence: 0.45, stamina: { max: 100, regen: 18 },
+      movement: 'kite', leader: false, confidence: 0.45, stamina: { max: 100, regen: 18 },
     },
     {
       id: 'r-healer', name: 'Cleric', role: 'Support', color: '#f8fafc', shape: 'circle',
@@ -158,7 +158,7 @@ export const CONFIG = {
       modifiers: [],
       selfPreservation: ['hide'],
       target: { side: 'ally', rule: 'lowestHp' },
-      movement: 'keepDistance', leader: false, personality: 'cheerful', confidence: 0.5,
+      movement: 'keepDistance', leader: false, confidence: 0.5,
     },
     {
       id: 'r-mage', name: 'Pyromancer', role: 'AOE', color: '#f97316', shape: 'circle',
@@ -168,7 +168,7 @@ export const CONFIG = {
       modifiers: ['slow'],
       selfPreservation: ['hide'],
       target: { side: 'enemy', rule: 'mostAtOnce' },
-      movement: 'keepDistance', leader: false, personality: 'nervous', confidence: 0.4,
+      movement: 'keepDistance', leader: false, confidence: 0.4,
     },
     {
       id: 'r-assassin', name: 'Shadow', role: 'Assassin', color: '#a78bfa', shape: 'triangle',
@@ -178,7 +178,7 @@ export const CONFIG = {
       modifiers: ['evasive'],
       selfPreservation: ['hide'],
       target: { side: 'enemy', rule: 'weakest' },
-      movement: 'hunt', leader: false, personality: 'grumpy', confidence: 0.6, stamina: { max: 90, regen: 20 },
+      movement: 'hunt', leader: false, confidence: 0.6, stamina: { max: 90, regen: 20 },
     },
     {
       id: 'r-guardian', name: 'Warden', role: 'Guard', color: '#22d3ee', shape: 'square',
@@ -188,7 +188,7 @@ export const CONFIG = {
       modifiers: ['taunt'],
       selfPreservation: [],
       target: { side: 'enemy', rule: 'threatened' },
-      movement: 'guard', leader: false, personality: 'stoic', confidence: 0.7,
+      movement: 'guard', leader: false, confidence: 0.7,
     },
     {
       id: 'r-berserker', name: 'Berserker', role: 'Duelist', color: '#f472b6', shape: 'square',
@@ -198,7 +198,7 @@ export const CONFIG = {
       modifiers: ['lifesteal'],
       selfPreservation: [],
       target: { side: 'enemy', rule: 'strongest' },
-      movement: 'flank', leader: false, personality: 'cocky', confidence: 0.85, stamina: { max: 80, regen: 16 },
+      movement: 'flank', leader: false, confidence: 0.85, stamina: { max: 80, regen: 16 },
     },
     {
       id: 'r-stormcaller', name: 'Stormcaller', role: 'Disruptor', color: '#22d3ee', shape: 'circle',
@@ -208,7 +208,7 @@ export const CONFIG = {
       modifiers: [],
       selfPreservation: ['hide'],
       target: { side: 'enemy', rule: 'mostAtOnce' },
-      movement: 'keepDistance', leader: false, personality: 'cautious', confidence: 0.45,
+      movement: 'keepDistance', leader: false, confidence: 0.45,
     },
     {
       id: 'r-sentinel', name: 'Sentinel', role: 'Protector', color: '#60a5fa', shape: 'square',
@@ -218,7 +218,7 @@ export const CONFIG = {
       modifiers: ['peel'],
       selfPreservation: [],
       target: { side: 'ally', rule: 'threatened' },
-      movement: 'guard', leader: false, personality: 'stoic', confidence: 0.65,
+      movement: 'guard', leader: false, confidence: 0.65,
     },
     {
       id: 'r-hexer', name: 'Hexer', role: 'Debuffer', color: '#c084fc', shape: 'circle',
@@ -228,7 +228,7 @@ export const CONFIG = {
       modifiers: ['stun', 'slow'],
       selfPreservation: ['hide'],
       target: { side: 'enemy', rule: 'strongest' },
-      movement: 'keepDistance', leader: false, personality: 'grumpy', confidence: 0.4,
+      movement: 'keepDistance', leader: false, confidence: 0.4,
     },
     {
       id: 'r-crusader', name: 'Crusader', role: 'Off-tank', color: '#fbbf24', shape: 'square',
@@ -238,7 +238,7 @@ export const CONFIG = {
       modifiers: ['taunt'],
       selfPreservation: [],
       target: { side: 'enemy', rule: 'mostAtOnce' },
-      movement: 'advance', leader: false, personality: 'stoic', confidence: 0.75, stamina: { max: 130, regen: 8 },
+      movement: 'advance', leader: false, confidence: 0.75, stamina: { max: 130, regen: 8 },
     },
     {
       id: 'r-warhorn', name: 'Warhorn', role: 'Buffer', color: '#fde047', shape: 'circle',
@@ -248,7 +248,7 @@ export const CONFIG = {
       modifiers: [],
       selfPreservation: ['hide'],
       target: { side: 'ally', rule: 'strongest' },
-      movement: 'keepDistance', leader: false, personality: 'cheerful', confidence: 0.5,
+      movement: 'keepDistance', leader: false, confidence: 0.5,
     },
     {
       id: 'r-necro', name: 'Necromancer', role: 'Summoner', color: '#a3e635', shape: 'circle',
@@ -258,7 +258,7 @@ export const CONFIG = {
       modifiers: [],
       selfPreservation: ['hide'],
       target: { side: 'enemy', rule: 'closest' },
-      movement: 'keepDistance', leader: false, personality: 'nervous', confidence: 0.35,
+      movement: 'keepDistance', leader: false, confidence: 0.35,
     },
     {
       id: 'r-executioner', name: 'Executioner', role: 'Finisher', color: '#f87171', shape: 'triangle',
@@ -268,7 +268,7 @@ export const CONFIG = {
       modifiers: ['execute'],
       selfPreservation: [],
       target: { side: 'enemy', rule: 'highestHp' },
-      movement: 'hunt', leader: false, personality: 'cocky', confidence: 0.7, stamina: { max: 100, regen: 15 },
+      movement: 'hunt', leader: false, confidence: 0.7, stamina: { max: 100, regen: 15 },
     },
     {
       id: 'r-thorn', name: 'Thorn', role: 'Reflect tank', color: '#4ade80', shape: 'square',
@@ -278,7 +278,7 @@ export const CONFIG = {
       modifiers: ['thorns'],
       selfPreservation: [],
       target: { side: 'enemy', rule: 'closest' },
-      movement: 'advance', leader: false, personality: 'stoic', confidence: 0.8, stamina: { max: 150, regen: 6 },
+      movement: 'advance', leader: false, confidence: 0.8, stamina: { max: 150, regen: 6 },
     },
     {
       id: 'r-channeler', name: 'Channeler', role: 'Mana battery', color: '#38bdf8', shape: 'circle',
@@ -288,7 +288,7 @@ export const CONFIG = {
       modifiers: [],
       selfPreservation: ['hide'],
       target: { side: 'ally', rule: 'strongest' },
-      movement: 'keepDistance', leader: false, personality: 'cheerful', confidence: 0.4,
+      movement: 'keepDistance', leader: false, confidence: 0.4,
     },
   ],
 
@@ -511,6 +511,62 @@ export const CONFIG = {
     sprintCommit: 0.7,       // commitment above which the member sprints to engage
   },
 
+  // Unified per-frame decision (utility AI). Each frame a member scores a
+  // small set of candidate actions (retreat / peel / goal / hold / advance)
+  // and executes the highest. The scores are built from the same small
+  // vocabulary of signals (hurt, threatened, confidence, durability, backup,
+  // ally need) so tuning one block shapes the whole team. The member's kit
+  // (attack type + modifiers) decides which candidates are available and their
+  // base weight; these are the shared tuning knobs.
+  ai: {
+    // Retreat: flee to safety. Score rises with danger signals, so a hurt,
+    // shaken, or threatened member backs off while a healthy confident one
+    // keeps fighting. Subsumes the old critically-hurt / seek-heal / hide /
+    // seek-safety / evade-hunter overrides into one decision.
+    retreat: {
+      hurtWeight: 8.0,       // scales with how hurt the member is (0..1); strong
+                             // enough that a member below hurtThreshold actually
+                             // retreats instead of losing to the engage goal
+      hurtThreshold: 0.3,    // hp fraction below which retreat is urgent; aligned
+                             // with the commitment cap and hold-at-range guard so
+                             // there is no dead band where a hurt member dives in
+      seekHealWeight: 2.0,   // extra when the seekHeal instinct is active
+      hideWeight: 1.5,       // extra when a threat is close and hide is active
+      shakenWeight: 2.0,     // extra when confidence is below the safety threshold
+      hunterWeight: 1.5,     // extra when a hunter is close and not in range
+      outnumberWeight: 1.0,  // extra when outnumbered
+    },
+    // Peel: rush to defend a squishy ally under attack. Only available to
+    // members with the peel modifier.
+    peel: {
+      base: 2.0,
+      threatWeight: 1.0,     // scales with how threatened the squishy ally is
+    },
+    // Goal: act on the kit-derived goal (support an ally, taunt a crowd, or
+    // engage the focus target). The score depends on the attack type.
+    goal: {
+      supportBase: 2.0,      // support types (heal/shield/buff/mana)
+      needWeight: 1.0,       // scales with how much the ally needs the cast
+      engageBase: 1.0,       // damage/taunt types
+      commitWeight: 1.0,     // scales with commitment (confidence+durability+backup)
+    },
+    // Hold: keep distance from the goal when commitment is low (cautious).
+    hold: {
+      base: 0.5,
+    },
+    // Advance: no enemies and no goal, head toward the exit / formation.
+    advance: {
+      base: 0.3,          // enemies still present, but no goal to act on
+      clearRoom: 1.0,     // room clear: walk to the door instead of idling
+    },
+    // Anti-oscillation: bonus to the previously chosen action so a member
+    // doesn't flip between actions every frame at a score boundary.
+    stickiness: 0.5,
+    // Durability (hp + armor*10) at/above which a member counts as a front-liner.
+    // Defined once here so every AI layer agrees on who is "tanky."
+    frontlineDurability: 200,
+  },
+
   // Intel: per-member learned knowledge about enemy kinds. Members only fear
   // what they have personally experienced, so a fresh recruit dives in and
   // learns the hard way. `danger` is the average damage a kind has dealt to
@@ -555,12 +611,9 @@ export const CONFIG = {
     // recovers nerve quickly and barely flinches when hit, a nervous one
     // recovers slowly and is easily rattled. Everyone drifts back to the same
     // shared fighting morale, so no member is ever permanently stuck below the
-    // safety threshold. A small personality bias nudges the starting value.
-    // There is no separate aggression axis anymore: one continuous confidence
-    // value drives bravery, and it evolves dynamically as the fight plays out.
-    personalityBias: {      // additive starting offset per personality
-      cocky: 0.3, cheerful: 0.2, stoic: 0.1, cautious: -0.1, grumpy: -0.1, nervous: -0.3, chatty: 0.1,
-    },
+    // safety threshold. There is no separate aggression axis anymore: one
+    // continuous confidence value drives bravery, and it evolves dynamically
+    // as the fight plays out.
     hitDrop: 0.08,          // confidence lost each time the member is hit
     avoidDrop: 0.12,        // confidence lost each time the member backs off (retreat/hold)
     recoverScale: 1.0,      // base multiplier; recovery is further scaled by (0.5 + baseConfidence)
@@ -872,358 +925,6 @@ export const CONFIG = {
         '{name}: Save me some mana!',
         '{name}: I\'m spent, no mana left!',
       ],
-      // Personality-flavored lines. Each personality has its own take on the
-      // same situations, so the team feels distinct. {name} and {target} are
-      // substituted as usual.
-      personality: {
-        stoic: {
-          idle: [
-            '{name}: Stay sharp.',
-            '{name}: Keep moving.',
-            '{name}: Quiet for now...',
-            '{name}: Eyes open.',
-            '{name}: Steady.',
-          ],
-          advancing: [
-            '{name}: Moving up.',
-            '{name}: Pushing forward.',
-            '{name}: On the move.',
-            '{name}: Advancing.',
-            '{name}: Keep pace.',
-          ],
-          attacking: [
-            '{name}: Engaging.',
-            '{name}: On them.',
-            '{name}: Take this.',
-            '{name}: Feel that.',
-          ],
-          killing: [
-            '{name}: One down.',
-            '{name}: Target eliminated.',
-            '{name}: Done.',
-          ],
-          lowHp: [
-            '{name}: I\'m hurt.',
-            '{name}: Wounded.',
-            '{name}: I can\'t take much more.',
-          ],
-          noEnemies: [
-            '{name}: All clear.',
-            '{name}: Nothing left here.',
-            '{name}: Onward.',
-          ],
-          quiet: [
-            '{name}: Peaceful.',
-            '{name}: I like the quiet.',
-            '{name}: Good. Time to think.',
-          ],
-          avoiding: [
-            '{name}: That one hits too hard. Withdrawing.',
-            '{name}: Not worth the risk. Falling back.',
-            '{name}: I\'ll engage when it\'s softened.',
-          ],
-          holding: [
-            '{name}: Can\'t escape. Holding position.',
-            '{name}: I\'ll hold here.',
-            '{name}: Standing my ground.',
-          ],
-        },
-        cocky: {
-          idle: [
-            '{name}: Try to keep up.',
-            '{name}: This is too easy.',
-            '{name}: Boring. Let\'s find a real fight.',
-            '{name}: I could do this all day.',
-          ],
-          advancing: [
-            '{name}: Let\'s go, slowpokes!',
-            '{name}: Move it!',
-            '{name}: I\'m already bored.',
-          ],
-          attacking: [
-            '{name}: Ha! Too easy!',
-            '{name}: Watch and learn!',
-            '{name}: Is that all you\'ve got?',
-            '{name}: I\'m just getting started!',
-          ],
-          killing: [
-            '{name}: Ha! Too easy.',
-            '{name}: Next!',
-            '{name}: Who\'s next?',
-            '{name}: I didn\'t even break a sweat.',
-          ],
-          lowHp: [
-            '{name}: They actually got me?!',
-            '{name}: This is nothing!',
-            '{name}: I\'m fine, I\'m fine!',
-          ],
-          noEnemies: [
-            '{name}: That was it?',
-            '{name}: Boring. Let\'s find a real fight.',
-            '{name}: I wanted more.',
-          ],
-          quiet: [
-            '{name}: Too quiet. I\'m bored.',
-            '{name}: This is the boring part.',
-            '{name}: I could take on ten more.',
-          ],
-          avoiding: [
-            '{name}: Ha! I\'m not stupid enough for that one!',
-            '{name}: Even I know better than to dive in there!',
-            '{name}: Let it come to me, I\'m not charging that!',
-          ],
-          holding: [
-            '{name}: Can\'t run? Fine, I\'ll hold!',
-            '{name}: I\'ll stand here and take it!',
-            '{name}: Not backing down, even if I can\'t flee!',
-          ],
-        },
-        cautious: {
-          idle: [
-            '{name}: Careful, everyone.',
-            '{name}: Stay close.',
-            '{name}: Watch the shadows.',
-            '{name}: Something feels off...',
-          ],
-          advancing: [
-            '{name}: Slowly now.',
-            '{name}: Careful as we go.',
-            '{name}: Watch your step.',
-          ],
-          attacking: [
-            '{name}: Careful, it\'s dangerous!',
-            '{name}: Keep your guard up!',
-            '{name}: Don\'t get reckless!',
-          ],
-          killing: [
-            '{name}: One less to worry about.',
-            '{name}: Good. Stay alert.',
-            '{name}: Careful, there may be more.',
-          ],
-          lowHp: [
-            '{name}: I\'m hurt, be careful!',
-            '{name}: I need to fall back!',
-            '{name}: This is getting dangerous!',
-          ],
-          noEnemies: [
-            '{name}: All clear... for now.',
-            '{name}: Let\'s not linger.',
-            '{name}: Quiet. Too quiet.',
-          ],
-          quiet: [
-            '{name}: Too quiet. Something\'s coming.',
-            '{name}: I don\'t trust this calm.',
-            '{name}: Stay alert, everyone.',
-          ],
-          avoiding: [
-            '{name}: Careful, that one\'s dangerous!',
-            '{name}: Let\'s not rush into that one!',
-            '{name}: I\'m backing off, it hits too hard!',
-          ],
-          holding: [
-            '{name}: I can\'t outrun it, holding!',
-            '{name}: No escape, I\'ll hold my ground!',
-            '{name}: Staying put, it\'s too fast!',
-          ],
-        },
-        cheerful: {
-          idle: [
-            '{name}: What a lovely day for a fight!',
-            '{name}: We make a great team!',
-            '{name}: I\'m glad we\'re together!',
-            '{name}: Onward, friends!',
-          ],
-          advancing: [
-            '{name}: Let\'s go, team!',
-            '{name}: This is exciting!',
-            '{name}: Adventure awaits!',
-          ],
-          attacking: [
-            '{name}: Here we go!',
-            '{name}: Let\'s do this!',
-            '{name}: Yay, a fight!',
-            '{name}: We\'ve got this!',
-          ],
-          killing: [
-            '{name}: Great job, everyone!',
-            '{name}: We did it!',
-            '{name}: Nice work!',
-          ],
-          lowHp: [
-            '{name}: Ouch! But I\'m okay!',
-            '{name}: That hurt, but I\'ll be fine!',
-            '{name}: Don\'t worry about me!',
-          ],
-          noEnemies: [
-            '{name}: All clear, wonderful!',
-            '{name}: Great work, team!',
-            '{name}: On to the next!',
-          ],
-          quiet: [
-            '{name}: A peaceful moment!',
-            '{name}: I love these quiet times together.',
-            '{name}: Let\'s enjoy the calm!',
-          ],
-          avoiding: [
-            '{name}: Ooh, that one\'s scary! Let\'s not!',
-            '{name}: I\'ll stay back, that one\'s mean!',
-            '{name}: No thank you, I\'m retreating!',
-          ],
-          holding: [
-            '{name}: I can\'t run, so I\'ll hold!',
-            '{name}: Stuck here, but I\'ll be brave!',
-            '{name}: I\'ll hold the line, friends!',
-          ],
-        },
-        grumpy: {
-          idle: [
-            '{name}: Hmph.',
-            '{name}: I\'m only here for the pay.',
-            '{name}: Don\'t talk to me.',
-            '{name}: This place stinks.',
-          ],
-          advancing: [
-            '{name}: Fine, let\'s go.',
-            '{name}: Hurry up.',
-            '{name}: Whatever.',
-          ],
-          attacking: [
-            '{name}: Get out of my way.',
-            '{name}: You again?',
-            '{name}: Annoying pests.',
-            '{name}: Just die already.',
-          ],
-          killing: [
-            '{name}: Finally.',
-            '{name}: About time.',
-            '{name}: One less nuisance.',
-          ],
-          lowHp: [
-            '{name}: Tch. I\'m hurt.',
-            '{name}: This is your fault.',
-            '{name}: I\'m bleeding. Great.',
-          ],
-          noEnemies: [
-            '{name}: Finally, some quiet.',
-            '{name}: About time.',
-            '{name}: Let\'s just go.',
-          ],
-          quiet: [
-            '{name}: Finally, some peace.',
-            '{name}: Don\'t ruin it.',
-            '{name}: Hmph. Fine.',
-          ],
-          avoiding: [
-            '{name}: Tch. Not walking into that.',
-            '{name}: I\'m not getting shredded for this.',
-            '{name}: Backing off. It\'s not worth it.',
-          ],
-          holding: [
-            '{name}: Can\'t escape. Great. Holding.',
-            '{name}: Stuck here. I\'ll hold.',
-            '{name}: No point running. I\'ll stand my ground.',
-          ],
-        },
-        nervous: {
-          idle: [
-            '{name}: Is it safe?',
-            '{name}: I don\'t like this...',
-            '{name}: What was that noise?',
-            '{name}: Please don\'t be a trap...',
-          ],
-          advancing: [
-            '{name}: Do we have to go this way?',
-            '{name}: Careful, careful...',
-            '{name}: I have a bad feeling...',
-          ],
-          attacking: [
-            '{name}: Oh no, oh no!',
-            '{name}: Please go away!',
-            '{name}: I don\'t want to fight!',
-            '{name}: Someone help!',
-          ],
-          killing: [
-            '{name}: Oh thank goodness.',
-            '{name}: It\'s gone, it\'s gone!',
-            '{name}: I didn\'t like that at all.',
-          ],
-          lowHp: [
-            '{name}: I\'m hurt, help!',
-            '{name}: This is bad, really bad!',
-            '{name}: I don\'t want to die!',
-          ],
-          noEnemies: [
-            '{name}: Is it really over?',
-            '{name}: Let\'s get out of here.',
-            '{name}: I need a moment...',
-          ],
-          quiet: [
-            '{name}: Is it safe to relax?',
-            '{name}: I don\'t like how quiet it is.',
-            '{name}: Can we leave now?',
-          ],
-          avoiding: [
-            '{name}: Oh no, that one\'s dangerous! Backing off!',
-            '{name}: I\'m not going near that thing!',
-            '{name}: Retreating, retreating!',
-          ],
-          holding: [
-            '{name}: I can\'t run! I\'m holding, I\'m holding!',
-            '{name}: Stuck here, please don\'t hurt me!',
-            '{name}: I\'ll hold, but I don\'t like it!',
-          ],
-        },
-        chatty: {
-          idle: [
-            '{name}: So, anyone else think this place is creepy?',
-            '{name}: I had a dream about a giant bat last night.',
-            '{name}: Did you see that? No? Never mind.',
-            '{name}: I could talk for hours, you know.',
-            '{name}: Hey, tell me about your hometown!',
-          ],
-          advancing: [
-            '{name}: Ooh, moving up! Exciting!',
-            '{name}: Let\'s go, let\'s go!',
-            '{name}: I\'ve got a good feeling about this!',
-          ],
-          attacking: [
-            '{name}: Oh! Oh! My turn!',
-            '{name}: Look at me go!',
-            '{name}: Did you see that? I did that!',
-            '{name}: This is so much fun!',
-          ],
-          killing: [
-            '{name}: Did everyone see that?',
-            '{name}: That was me! I did that!',
-            '{name}: One down, and I\'m not even tired!',
-          ],
-          lowHp: [
-            '{name}: Ow! Hey, that hurt!',
-            '{name}: I\'m hurt! Someone, anyone!',
-            '{name}: This is not fun anymore!',
-          ],
-          noEnemies: [
-            '{name}: All clear! Great job, everyone!',
-            '{name}: We did it! Let\'s celebrate!',
-            '{name}: Onward, my friends!',
-          ],
-          quiet: [
-            '{name}: So quiet! Perfect for a chat!',
-            '{name}: I\'ve been meaning to tell you all something...',
-            '{name}: Anyone want to hear a story?',
-          ],
-          avoiding: [
-            '{name}: Ooh, that one looks mean! I\'m backing off!',
-            '{name}: Not today, scary thing! Retreating!',
-            '{name}: I\'ll let someone else poke that one!',
-          ],
-          holding: [
-            '{name}: Can\'t run, so I\'ll hold! And talk about it!',
-            '{name}: Stuck here! Anyone want to keep me company?',
-            '{name}: I\'ll hold, but I\'m not happy about it!',
-          ],
-        },
-      },
     },
   },
 };
