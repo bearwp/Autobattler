@@ -432,9 +432,8 @@
     .tavern-head { display: flex; align-items: center; gap: 12px; }
     .tavern-head h3 { margin: 0; color: #e0e0e0; font-size: 18px; flex: 1; }
     .tavern-gold { color: #fbbf24; font-weight: 700; font-size: 15px; }
+    .tavern-progress { color: #aaa; font-size: 13px; font-weight: 600; }
     .tavern-party { display: flex; flex-direction: column; gap: 6px; }
-    .tavern-for-hire { display: flex; flex-direction: column; gap: 6px; overflow-y: auto; }
-    .tavern-hire-grid { display: flex; gap: 10px; flex-wrap: wrap; }
     .tavern-footer {
       display: flex; align-items: center; gap: 12px;
       border-top: 1px solid #2a2a35; padding-top: 12px;
@@ -450,28 +449,90 @@
       padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 13px;
     }
     .tavern-footer #btn-tavern-reset:hover { background: #5a2a2a; }
+
+    /* Tinder-style recruit cards */
+    .tinder-card-wrap {
+      display: flex; justify-content: center; align-items: center;
+      min-height: 320px; position: relative;
+    }
+    .tinder-card {
+      width: 380px; max-width: 92vw; min-height: 300px;
+      background: #16161d; border: 1px solid #3a3a45; border-radius: 14px;
+      padding: 20px 22px; display: flex; flex-direction: column; gap: 10px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+      animation: tinder-in 0.25s ease-out;
+    }
+    @keyframes tinder-in { from { opacity: 0; transform: translateY(14px) scale(0.98); } to { opacity: 1; transform: none; } }
+    .tinder-card .tc-head { display: flex; align-items: center; gap: 12px; }
+    .tinder-card .tc-head .icon { width: 44px; height: 44px; flex: 0 0 auto; }
+    .tinder-card .tc-name { color: #e0e0e0; font-weight: 700; font-size: 20px; flex: 1; }
+    .tinder-card .tc-cost {
+      background: #2a2413; color: #fbbf24; border: 1px solid #4a3f1d;
+      padding: 4px 10px; border-radius: 20px; font-weight: 700; font-size: 14px;
+      flex: 0 0 auto;
+    }
+    .tinder-card .tc-cost.owned { background: #16211a; color: #4ade80; border-color: #2a5a3a; }
+    .tinder-card .tc-cap {
+      color: #7dd3fc; font-size: 15px; font-weight: 600; line-height: 1.4;
+      padding: 4px 0 2px;
+    }
+    .tinder-card .tc-standout {
+      color: #4ade80; font-size: 14px; font-weight: 600; line-height: 1.4;
+      padding-bottom: 6px;
+    }
+    .tinder-card .tc-attr {
+      color: #aaa; font-size: 12px; line-height: 1.5;
+      background: #1c1c24; border: 1px solid #2a2a35; border-radius: 8px;
+      padding: 6px 10px;
+    }
+    .tinder-card .tc-attr b { color: #e0e0e0; }
+    .tinder-card .tc-bio b { color: #fbbf24; font-weight: 700; }
+    .tinder-card .tc-role {
+      color: #7dd3fc; font-size: 11px; font-weight: 600; letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+    .tinder-card .tc-stats {
+      display: flex; flex-wrap: wrap; gap: 6px 16px;
+      background: #1c1c24; border: 1px solid #2a2a35; border-radius: 8px;
+      padding: 8px 12px;
+    }
+    .tinder-card .tc-stat { color: #aaa; font-size: 12px; }
+    .tinder-card .tc-stat b { color: #e0e0e0; }
+    .tinder-card .tc-stat i { color: #666; font-style: normal; font-size: 11px; }
+    .tinder-card .tc-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+    .tinder-card .tc-chip {
+      background: #2a2a35; border: 1px solid #3a3a45; color: #ddd;
+      font-size: 11px; padding: 3px 10px; border-radius: 20px; cursor: help;
+    }
+    .tinder-card .tc-chip.mod { background: #241f33; border-color: #4a3a6a; color: #e9d5ff; }
+    .tinder-card .tc-chip.sp { background: #1f2a2a; border-color: #3a6a6a; color: #b2f2f2; }
+    .tinder-card .tc-chip.pers { background: #2a1f24; border-color: #6a4a52; color: #fbcfe8; }
+    .tinder-actions {
+      display: flex; justify-content: center; gap: 16px; padding: 4px 0 8px;
+    }
+    .tinder-btn {
+      padding: 10px 26px; border-radius: 30px; font-size: 15px; font-weight: 700;
+      cursor: pointer; border: 1px solid transparent;
+    }
+    .tinder-btn.skip { background: #2a1d1d; color: #f87171; border-color: #5a2a2a; }
+    .tinder-btn.skip:hover { background: #3d2626; }
+    .tinder-btn.hire { background: #1a3a24; color: #4ade80; border-color: #2a5a3a; }
+    .tinder-btn.hire:hover { background: #20472d; }
+    .tinder-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .tinder-empty { color: #aaa; font-size: 14px; text-align: center; padding: 40px; }
     .tavern-hire-card {
       background: #16161d; border: 1px solid #2a2a35; border-radius: 8px;
-      padding: 12px; display: flex; flex-direction: column; gap: 6px;
-      width: 170px;
+      padding: 8px 12px; display: flex; flex-direction: column; gap: 4px;
+      min-width: 240px;
     }
     .tavern-hire-card .th-head { display: flex; align-items: center; gap: 8px; }
     .tavern-hire-card .th-head .icon { width: 22px; height: 22px; flex: 0 0 auto; }
-    .tavern-hire-card .th-name { color: #e0e0e0; font-weight: 600; font-size: 13px; }
+    .tavern-hire-card .th-name { color: #e0e0e0; font-weight: 600; font-size: 13px; flex: 1; }
+    .tavern-hire-card .th-role { color: #7dd3fc; font-size: 10px; }
     .tavern-hire-card .th-stats { color: #888; font-size: 11px; }
-    .tavern-hire-card .th-trait { color: #fbcfe8; font-size: 11px; margin-top: 2px; }
-    .tavern-hire-card .th-attack { color: #aaa; font-size: 11px; }
-    .tavern-hire-card .th-abilities { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 4px; }
-    .tavern-hire-card .th-abilities .chip { font-size: 9px; padding: 1px 5px; cursor: default; }
-    .tavern-hire-card .th-abilities .chip .chip-x { display: none; }
-    .tavern-hire-card .th-buy {
-      margin-top: auto; background: #2a2a35; color: #fbbf24; border: 1px solid #4a3f1d;
-      border-radius: 6px; padding: 5px 0; font-size: 12px; cursor: pointer; font-weight: 600;
-    }
-    .tavern-hire-card .th-buy:hover { background: #3a341c; }
-    .tavern-hire-card .th-buy:disabled { opacity: 0.4; cursor: not-allowed; }
-    .tavern-hire-card.owned { border-color: #4ade80; }
-    .tavern-hire-card.owned .th-buy { background: #16211a; color: #4ade80; border-color: #2a4a35; cursor: default; }
+    .tavern-hire-card .th-attr { color: #999; font-size: 11px; margin-top: 4px; }
+    .tavern-hire-card .th-buy { color: #4ade80; font-size: 11px; font-weight: 600; }
+    .tavern-hire-card.owned { border-color: #2a4a35; }
 
     /* Debug side panel */
     #debug-panel {
@@ -700,17 +761,19 @@
       <div class="tavern-panel">
         <div class="tavern-head">
           <h3>The Tavern</h3>
+          <span class="tavern-progress" id="tavern-progress"></span>
           <span class="tavern-gold" id="tavern-gold">🪙 0</span>
         </div>
-        <p class="roster-sub" id="tavern-sub">Hire adventurers to start a run. Your hero and survivors are always ready.</p>
-        <div class="tavern-party">
-          <span class="rest-sub">Your company (field on the next run):</span>
-          <div id="tavern-company" class="rest-upgrade-list"></div>
+        <p class="roster-sub" id="tavern-sub">Adventurers pass by one at a time. Recruit the ones you want with gold, or skip them.</p>
+        <div class="tinder-card-wrap" id="tinder-card-wrap"></div>
+        <div class="tinder-actions">
+          <button id="btn-tavern-skip" class="tinder-btn skip">Skip ✕</button>
+          <button id="btn-tavern-hire" class="tinder-btn hire">Recruit</button>
         </div>
         <div class="rest-divider"></div>
-        <div class="tavern-for-hire">
-          <span class="rest-sub">Adventurers looking for work:</span>
-          <div id="tavern-for-hire" class="tavern-hire-grid"></div>
+        <div class="tavern-party">
+          <span class="rest-sub">Your company (fielded on the next run):</span>
+          <div id="tavern-company" class="rest-upgrade-list"></div>
         </div>
         <div class="tavern-footer">
           <span class="roster-count" id="tavern-count"></span>

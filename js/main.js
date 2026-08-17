@@ -35,8 +35,11 @@ const tavernOverlayEl = document.getElementById('tavern-overlay');
 const tavernGoldEl = document.getElementById('tavern-gold');
 const tavernSubEl = document.getElementById('tavern-sub');
 const tavernCompanyEl = document.getElementById('tavern-company');
-const tavernForHireEl = document.getElementById('tavern-for-hire');
+const tavernProgressEl = document.getElementById('tavern-progress');
+const tinderCardWrapEl = document.getElementById('tinder-card-wrap');
 const tavernCountEl = document.getElementById('tavern-count');
+const btnTavernSkip = document.getElementById('btn-tavern-skip');
+const btnTavernHire = document.getElementById('btn-tavern-hire');
 const btnTavernLeave = document.getElementById('btn-tavern-leave');
 const btnTavernReset = document.getElementById('btn-tavern-reset');
 const restGoldEl = document.getElementById('rest-gold');
@@ -552,28 +555,131 @@ function applyRoster() {
 }
 
 // --- Tavern (meta) ---
-// The persistent hub between runs: hire adventurers with banked gold, then
-// start a run with your company. Survivors return to the tavern afterwards.
+// The persistent hub between runs: swipe through adventurers one at a time
+// (Tinder style), recruit the ones you want with banked gold, or skip them.
+// Survivors return to the tavern afterwards.
 
-let tavernRecruits = rollTavernRecruits(6); // adventurers currently in the tavern
+const TAVERN_POOL = 5; // adventurers offered per tavern visit
 
-function hireCard(m) {
+let tavernRecruits = rollTavernRecruits(TAVERN_POOL); // candidates in the tavern
+let tavernIndex = 0;                                  // which candidate is on the table
+
+function roleOf(m) {
+  const t = m.attack.type, side = m.target && m.target.side;
+  if (t === 'taunt') return side === 'ally' ? 'Protector' : 'Frontline Tank';
+  if (t === 'heal' || t === 'shield' || t === 'buff' || t === 'mana') return 'Support';
+  if (t === 'summon') return 'Summoner';
+  if (t === 'push') return 'Disruptor';
+  if (t === 'damage') return m.attack.shape && m.attack.shape.startsWith('range') ? 'Ranged DPS' : 'Melee Fighter';
+  return 'Adventurer';
+}
+
+// Natural-language recruiting pitch: what they do, their standout strength,
+// their weakness, and any unique tricks. Reads like a person, not a sheet.
+const TRICK_PHRASE = {
+  taunt: 'taunt nearby enemies',
+  lifesteal: 'heal off the damage they deal',
+  pierce: 'hit an enemy behind their target',
+  slow: 'slow their target',
+  peel: 'rush to defend squishy allies',
+  evasive: 'back away from whoever targets them',
+  burn: 'ignite targets, dealing damage over time',
+  stun: 'stun their target',
+  thorns: 'reflect melee damage back at attackers',
+  execute: 'finish off enemies below half health',
+  hide: 'retreat behind the tankiest ally when threatened',
+  seekHeal: 'run to the healer when badly hurt',
+};
+
+const ATTACK_VERB = {
+  damage: 'Strikes',
+  heal: 'Heals',
+  taunt: 'Taunts',
+  shield: 'Shields',
+  buff: 'Buffs',
+  mana: 'Feeds mana to',
+  push: 'Pushes',
+};
+
+function targetPhrase(m) {
+  const side = m.target.side === 'ally' ? 'ally' : 'enemy';
+  const plural = m.target.side === 'ally' ? 'allies' : 'enemies';
+  switch (m.target.rule) {
+    case 'lowestHp': return `the ${side} with the lowest HP`;
+    case 'highestHp': return `the ${side} with the highest HP`;
+    case 'closest': return `the closest ${side}`;
+    case 'strongest': return `the strongest ${side}`;
+    case 'weakest': return `the weakest ${side}`;
+    case 'mostAtOnce': return `the most ${plural} at once`;
+    case 'threatened': return `threatened ${plural}`;
+    default: return `the ${side}`;
+  }
+}
+
+function tavernBlurb(m) {
+  const s = m.stats, a = m.attack;
+  const sentences = [];
+  if (a.type === 'summon') {
+    sentences.push('Summons a minion to rush the enemy.');
+  } else {
+    const verb = ATTACK_VERB[a.type] || 'Attacks';
+    sentences.push(`${verb} ${targetPhrase(m)}.`);
+  }
+
+  const scale = { damage: 60, range: 9, hp: 400, armor: 10, speed: 4.5, mana: 160 };
+  const cands = [
+    ['damage', a.atk || 0, scale.damage],
+    ['range', a.range, scale.range],
+    ['hp', s.hp, scale.hp],
+    ['armor', s.armor, scale.armor],
+    ['speed', s.speed, scale.speed],
+  ];
+  if (s.mana) cands.push(['mana', s.mana.max, scale.mana]);
+  const sorted = cands.slice().sort((x, y) => y[1] / y[2] - x[1] / x[2]);
+  const best = sorted[0], worst = sorted[sorted.length - 1];
+
+  const bPct = best[1] / best[2];
+  if (bPct >= 0.85) sentences.push(`Their ${best[0]} is the best in the tavern.`);
+  else if (bPct >= 0.6) sentences.push(`Their ${best[0]} is a real strength.`);
+  else sentences.push(`Their ${best[0]} is dependable, if not flashy.`);
+
+  if (worst[1] / worst[2] < 0.4) sentences.push(`But their ${worst[0]} is on the low side.`);
+
+  const tricks = [...(m.modifiers || []), ...(m.selfPreservation || [])]
+    .map(id => TRICK_PHRASE[id]).filter(Boolean);
+  if (tricks.length) {
+    const joined = tricks.length === 1 ? tricks[0]
+      : tricks.slice(0, -1).join(', ') + ', and ' + tricks[tricks.length - 1];
+    sentences.push(`They can ${joined}.`);
+  }
+
+  const conf = Math.round((m.confidence ?? 0.5) * 100);
+  sentences.push(`${conf}% brave.`);
+
+  return sentences.join(' ');
+}
+
+function tinderCard(m) {
   const salary = m.salary ?? salaryOf(m);
+  const owned = m._owned;
+  const costBadge = owned
+    ? '<span class="tc-cost owned">Owned</span>'
+    : `<span class="tc-cost">🪙 ${salary}</span>`;
+
   return `
-    <div class="tavern-hire-card ${m._owned ? 'owned' : ''}" data-id="${m.id}">
-      <div class="th-head">
+    <div class="tinder-card" data-id="${m.id}">
+      <div class="tc-head">
         <div class="icon">${iconSvg(m)}</div>
-        <span class="th-name">${m.name}</span>
+        <span class="tc-name">${m.name}</span>
+        <span class="tc-role">${roleOf(m)}</span>
+        ${costBadge}
       </div>
-      <div class="th-stats">HP ${m.stats.hp} · Arm ${m.stats.armor} · Spd ${m.stats.speed.toFixed(1)}</div>
-      <div class="th-trait">Conf ${m.confidence ?? 0.5} · Stam ${(m.stats.stamina && m.stats.stamina.max) || CONFIG.stamina.max} · Regen ${(m.stats.stamina && m.stats.stamina.regen) || CONFIG.stamina.regen}</div>
-      <div class="th-attack" title="${keywordTip(m.attack.type)}">${ATK_TYPE_LABELS[m.attack.type] || m.attack.type} · ${SHAPE_LABELS[m.attack.shape] || m.attack.shape}</div>
-      ${(m.modifiers || []).length || (m.selfPreservation || []).length
-        ? `<div class="th-abilities">${modifierChips(m.modifiers)}${selfPreservationChips(m.selfPreservation)}</div>`
-        : ''}
-      ${m._owned ? '<div class="th-buy">Owned</div>'
-        : `<button class="th-buy" data-buy="${m.id}">Hire — 🪙 ${salary}</button>`}
+      <div class="tc-cap">${tavernBlurb(m)}</div>
     </div>`;
+}
+
+function currentCandidate() {
+  return tavernIndex < tavernRecruits.length ? tavernRecruits[tavernIndex] : null;
 }
 
 function renderTavern() {
@@ -582,13 +688,38 @@ function renderTavern() {
   const owns = (id) => meta.heroes.some(h => h.id === id) || meta.known.some(k => k.id === id);
 
   // Company already owned (fieldable).
-  const company = [...meta.heroes, ...meta.known].map(m => ({ ...m, _owned: true, salary: salaryOf(m) }));
-  tavernCompanyEl.innerHTML = company.map(hireCard).join('');
+  const company = [...meta.heroes, ...meta.known];
+  tavernCompanyEl.innerHTML = company.map(m => {
+    const c = { ...m, _owned: true, salary: salaryOf(m) };
+    return `<div class="tavern-hire-card owned" data-id="${m.id}">
+      <div class="th-head">
+        <div class="icon">${iconSvg(m)}</div>
+        <span class="th-name">${m.name}</span>
+        <span class="th-role">${roleOf(m)}</span>
+      </div>
+      <div class="th-stats">${m.attack ? (ATK_TYPE_LABELS[m.attack.type] || m.attack.type) + ' · ' + (SHAPE_LABELS[m.attack.shape] || m.attack.shape) : ''}</div>
+      <div class="th-buy">Owned</div>
+    </div>`;
+  }).join('');
 
-  // For-hire pool: merge survivors (already owned, shown as such) with fresh
-  // recruits. Mark anything already owned so it can't be double-bought.
-  const pool = tavernRecruits.map(m => ({ ...m, salary: salaryOf(m), _owned: owns(m.id) }));
-  tavernForHireEl.innerHTML = pool.map(hireCard).join('');
+  const cand = currentCandidate();
+  const remaining = tavernRecruits.length - tavernIndex;
+  tavernProgressEl.textContent = remaining > 0 ? `${remaining} left` : 'done';
+
+  if (cand) {
+    const c = { ...cand, salary: salaryOf(cand), _owned: owns(cand.id) };
+    tinderCardWrapEl.innerHTML = tinderCard(c);
+    const affordable = c._owned || meta.gold >= c.salary;
+    btnTavernHire.disabled = !affordable;
+    btnTavernHire.textContent = c._owned ? 'Advance →' : `Recruit — 🪙 ${c.salary}`;
+    btnTavernSkip.disabled = false;
+  } else {
+    tinderCardWrapEl.innerHTML = '<div class="tinder-empty">No more adventurers to review.<br>Take your company and start the run.</div>';
+    btnTavernHire.disabled = true;
+    btnTavernHire.textContent = 'Recruit';
+    btnTavernSkip.disabled = true;
+  }
+
   tavernCountEl.textContent = `${company.length} in your company · ${meta.wins}/${meta.runs} runs won`;
   btnTavernLeave.disabled = company.length === 0;
 }
@@ -603,40 +734,36 @@ function showTavern(message) {
   eventOverlayEl.classList.add('hidden');
 }
 
-tavernCompanyEl.addEventListener('click', (e) => {
-  const btn = e.target.closest('.th-buy');
-  if (!btn || btn.dataset.buy === undefined) return;
-  const id = btn.dataset.buy;
-  const m = [...getMeta().heroes, ...getMeta().known].find(x => x.id === id);
-  if (!m) return;
+function advanceTinder() {
+  tavernIndex += 1;
+  renderTavern();
+}
+
+btnTavernHire.addEventListener('click', () => {
+  const cand = currentCandidate();
+  if (!cand) return;
   const meta = getMeta();
-  if (meta.heroes.some(h => h.id === id) || meta.known.some(k => k.id === id)) return; // already owned
-  const salary = salaryOf(m);
+  if (meta.heroes.some(h => h.id === cand.id) || meta.known.some(k => k.id === cand.id)) {
+    // Already owned: just move on.
+    advanceTinder();
+    return;
+  }
+  const salary = salaryOf(cand);
   if (meta.gold < salary) return;
   addGold(-salary);
-  meta.known.push(m); // rehire a survivor
-  renderTavern();
+  meta.heroes.push(cand); // buy the hire outright, owned from now on
+  advanceTinder();
 });
 
-tavernForHireEl.addEventListener('click', (e) => {
-  const btn = e.target.closest('.th-buy');
-  if (!btn || btn.dataset.buy === undefined) return;
-  const id = btn.dataset.buy;
-  const m = tavernRecruits.find(x => x.id === id);
-  if (!m) return;
-  const meta = getMeta();
-  const salary = salaryOf(m);
-  if (meta.gold < salary) return;
-  addGold(-salary);
-  meta.heroes.push(m); // buy the hire outright, owned from now on
-  tavernRecruits = tavernRecruits.filter(x => x.id !== id);
-  tavernRecruits.push(rollTavernRecruits(1)[0]); // a new face shows up
-  renderTavern();
+btnTavernSkip.addEventListener('click', () => {
+  if (!currentCandidate()) return;
+  advanceTinder();
 });
 
 btnTavernReset.addEventListener('click', () => {
   resetMeta();
-  tavernRecruits = rollTavernRecruits(6);
+  tavernRecruits = rollTavernRecruits(TAVERN_POOL);
+  tavernIndex = 0;
   showTavern('Save wiped. A fresh purse and a clean slate.');
 });
 

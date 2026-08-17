@@ -1741,7 +1741,8 @@ export class Sim {
     if (!goal) {
       // No goal (e.g. no enemies and no hurt ally): advance or idle.
       this._intent(u, 'advancing into combat');
-      this._moveTo(u, this._advanceGoal(u), {}, dt);
+      const adv = this._advanceGoal(u);
+      this._moveTo(u, adv.pos, { follow: adv.leader, standoff: CONFIG.team.followDistance }, dt);
       this._separate(u, allies, dt);
       return;
     }
@@ -1938,11 +1939,11 @@ export class Sim {
         // on arrival, without walking into the enemy's face.
         const desired = Math.max(0, d - u.attack.range * 0.5);
         const dir = d > 0 ? scale(to, 1 / d) : { x: 0, y: 0 };
-        return add(u.pos, scale(dir, desired));
+        return { pos: add(u.pos, scale(dir, desired)), leader: null };
       }
     }
     const leader = this.playerUnits.find(a => a.alive && a.isLeader);
-    if (!leader || u.isLeader) return this._exitGoal();
+    if (!leader || u.isLeader) return { pos: this._exitGoal(), leader: null };
     const back = norm(sub(leader.pos, this._exitGoal()));
     const t = CONFIG.team;
     // Fan followers out behind the leader: the first sits directly behind,
@@ -1952,7 +1953,7 @@ export class Sim {
     const angle = i * t.formationWedge;
     const side = { x: -back.y, y: back.x };
     const dir = norm(add(scale(back, Math.cos(angle)), scale(side, Math.sin(angle))));
-    return add(leader.pos, scale(dir, t.followDistance));
+    return { pos: add(leader.pos, scale(dir, t.followDistance)), leader };
   }
 
   _resolveAttacks(u, target, enemies, allies) {
