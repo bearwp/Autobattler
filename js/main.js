@@ -34,6 +34,7 @@ const pvpTeamAEl = document.getElementById('pvp-team-a');
 const pvpTeamBEl = document.getElementById('pvp-team-b');
 const pvpStatusEl = document.getElementById('pvp-status');
 const btnPvpFight = document.getElementById('btn-pvp-fight');
+const btnPvpPass = document.getElementById('btn-pvp-pass');
 const btnPvpCancel = document.getElementById('btn-pvp-cancel');
 const pvpResultEl = document.getElementById('pvp-result');
 const pvpResultTitleEl = document.getElementById('pvp-result-title');
@@ -1056,6 +1057,8 @@ function renderPvpDraft() {
     : pvpDraft.phase === 'done'
       ? 'Match over.'
       : `Team ${turn.toUpperCase()} picks next`;
+  // Pass is only available on the current player's turn.
+  btnPvpPass.disabled = !pvpDraft.isTurn(pvpDraft.turn);
   btnPvpFight.disabled = !pvpDraft.roundComplete;
 }
 
@@ -1063,11 +1066,11 @@ function openPvpDraft() {
   pvpDraft = new Draft(buildPool(CONFIG.roster), {
     baseGold: PVP.baseGold,
     goldPerRound: PVP.goldPerRound,
-    picksPerPlayer: PVP.picksPerPlayer,
     rounds: PVP.rounds,
   });
   pvpResultEl.classList.add('hidden');
   sim.over = null; // clear the finished fight so updatePvpResult doesn't re-show it
+  sim.paused = true; // freeze the sim while drafting so the old fight can't re-trigger
   pvpOverlayEl.classList.remove('hidden');
   renderPvpDraft();
 }
@@ -1090,6 +1093,7 @@ function startPvpFight() {
     pvpNet.send({ type: 'fight', teamA, teamB, enemies });
   }
   sim.startPvp(teamA, teamB, { enemies });
+  sim.paused = false; // resume the sim for the fight
   buildTeamUi();
 }
 
@@ -1143,6 +1147,12 @@ function hostOnline() {
     if (msg.type === 'pick') {
       // The guest owns team B: only accept its pick when it's team B's turn.
       if (pvpDraft.turn === 'b' && pvpDraft.pick('b', msg.id)) {
+        renderPvpDraft();
+        broadcastDraft();
+      }
+    } else if (msg.type === 'pass') {
+      // The guest owns team B: only accept its pass when it's team B's turn.
+      if (pvpDraft.turn === 'b' && pvpDraft.pass('b')) {
         renderPvpDraft();
         broadcastDraft();
       }
@@ -1334,6 +1344,21 @@ pvpPoolEl.addEventListener('click', (e) => {
 
 btnPvpFight.addEventListener('click', startPvpFight);
 
+// Pass: end the current player's drafting for this round. The guest sends a
+// pass message; the host applies it locally and broadcasts the new state.
+btnPvpPass.addEventListener('click', () => {
+  if (!pvpDraft) return;
+  if (pvpRole === 'guest') {
+    if (pvpDraft.turn === 'b') pvpNet.send({ type: 'pass' });
+    return;
+  }
+  const myTeam = pvpRole === 'host' ? 'a' : pvpDraft.turn;
+  if (pvpDraft.pass(myTeam)) {
+    renderPvpDraft();
+    broadcastDraft();
+  }
+});
+
 btnPvpCancel.addEventListener('click', () => {
   pvpOverlayEl.classList.add('hidden');
   if (pvpNet) { pvpNet.close(); pvpNet = null; }
@@ -1354,6 +1379,8 @@ btnPvpRematch.addEventListener('click', () => {
 btnPvpNext.addEventListener('click', () => {
   pvpResultEl.classList.add('hidden');
   if (pvpRole === 'guest') return; // host controls the next draft
+  sim.over = null; // clear the finished fight so updatePvpResult doesn't re-show it
+  sim.paused = true; // freeze the sim while drafting so the old fight can't re-trigger
   pvpOverlayEl.classList.remove('hidden');
   renderPvpDraft();
   broadcastDraft();

@@ -3,9 +3,11 @@
 // deterministic replay — the host is the single source of truth.
 //
 // Round-based with permadeath: each round both players draft a team from a
-// shared pool (snake order), then fight. Gold starts at 50 and rises by 50
-// each round. Members who die in a fight are removed from the pool for the
-// rest of the match, so a team can be whittled down to nothing.
+// shared pool, then fight. Gold starts at 100 and rises by 100 each round.
+// There is no fixed pick count — on your turn you pick any member you can
+// afford, or pass to end your drafting for the round. Members who die in a
+// fight are removed from the pool for the rest of the match, so a team can be
+// whittled down to nothing.
 //
 // Team ownership: the host owns team 'a', the guest owns team 'b'. A pick is
 // only accepted for the player whose turn it is, so nobody can draft for the
@@ -15,16 +17,14 @@ import { salaryOf } from '../meta.js';
 
 export const PVP = {
   // Gold each player starts round 1 with.
-  baseGold: 50,
+  baseGold: 100,
   // Gold added to the budget each subsequent round.
-  goldPerRound: 50,
-  // Members each player drafts per round.
-  picksPerPlayer: 1,
+  goldPerRound: 100,
   // Rounds in a match (best-of-N, re-draft between rounds).
   rounds: 3,
 };
 
-// The gold budget for a given round: 50, 100, 150, ...
+// The gold budget for a given round: 100, 200, 300, ...
 export function goldForRound(round) {
   return PVP.baseGold + (round - 1) * PVP.goldPerRound;
 }
@@ -35,34 +35,20 @@ export function buildPool(roster) {
   return roster.map(m => ({ ...m, salary: salaryOf(m) }));
 }
 
-// The snake-draft pick order for a round. Player 'a' picks first, then 'b',
-// alternating. For 1 pick each: A, B. For 2: A, B, B, A (second player gets
-// two in a row to compensate for going second).
-export function pickOrder(picksPerPlayer) {
-  const order = [];
-  for (let i = 0; i < picksPerPlayer; i++) {
-    if (i % 2 === 0) order.push('a', 'b');
-    else order.push('b', 'a');
-  }
-  return order;
-}
-
 export class Draft {
   constructor(pool, opts = {}) {
     this.pool = pool;                       // shared member pool (with salary)
     this.baseGold = opts.baseGold ?? PVP.baseGold;
     this.goldPerRound = opts.goldPerRound ?? PVP.goldPerRound;
-    this.picksPerPlayer = opts.picksPerPlayer ?? PVP.picksPerPlayer;
     this.rounds = opts.rounds ?? PVP.rounds;
     this.round = 1;
     this.picks = { a: [], b: [] };          // member ids picked this round
     this.gold = { a: this.baseGold, b: this.baseGold };
+    this.passed = { a: false, b: false };   // has each player finished drafting?
     this.turn = 'a';                        // whose turn to pick
-    this.phase = 'drafting';                // 'drafting' | 'betweenRounds' | 'done'
+    this.phase = 'drafting';                 // 'drafting' | 'betweenRounds' | 'done'
     this.winner = null;                     // 'a' | 'b' | 'draw' | null
     this.dead = new Set();                  // member ids dead (permadeath)
-    this._order = pickOrder(this.picksPerPlayer);
-    this._orderIndex = 0;
   }
 
   // The member bundle for a pool id.
@@ -95,8 +81,7 @@ export class Draft {
 
   // Both players have finished drafting this round.
   get roundComplete() {
-    return this.picks.a.length >= this.picksPerPlayer &&
-      this.picks.b.length >= this.picksPerPlayer;
+    return this.passed.a && this.passed.b;
   }
 
   // Pick a member for the current player. Validates turn, availability, and
@@ -112,14 +97,24 @@ export class Draft {
     return true;
   }
 
+  // End the current player's drafting for this round. Returns true on success.
+  pass(player) {
+    if (!this.isTurn(player)) return false;
+    this.passed[player] = true;
+    this._advanceTurn();
+    return true;
+  }
+
+  // After a pick or pass, hand the turn to the other player if they can still
+  // act; otherwise the current player keeps it. Ends the round when both pass.
   _advanceTurn() {
-    this._orderIndex++;
-    if (this.roundComplete) {
+    if (this.passed.a && this.passed.b) {
       this.phase = 'betweenRounds';
       this.turn = null;
       return;
     }
-    this.turn = this._order[this._orderIndex];
+    const other = this.turn === 'a' ? 'b' : 'a';
+    this.turn = this.passed[other] ? this.turn : other;
   }
 
   // Mark members as dead (permadeath). They are removed from the pool for the
@@ -132,8 +127,8 @@ export class Draft {
     return newly;
   }
 
-  // Advance to the next round: reset picks and gold (escalating), keep the
-  // pool minus dead members. Returns false if the match is over.
+  // Advance to the next round: reset picks, gold (escalating), and pass state,
+  // keep the pool minus dead members. Returns false if the match is over.
   nextRound() {
     if (this.phase !== 'betweenRounds') return false;
     if (this.round >= this.rounds) {
@@ -143,7 +138,7 @@ export class Draft {
     this.round++;
     this.picks = { a: [], b: [] };
     this.gold = { a: goldForRound(this.round), b: goldForRound(this.round) };
-    this._orderIndex = 0;
+    this.passed = { a: false, b: false };
     this.turn = 'a';
     this.phase = 'drafting';
     return true;
@@ -165,11 +160,11 @@ export class Draft {
       pool: this.pool,
       baseGold: this.baseGold,
       goldPerRound: this.goldPerRound,
-      picksPerPlayer: this.picksPerPlayer,
       rounds: this.rounds,
       round: this.round,
       picks: this.picks,
       gold: this.gold,
+      passed: this.passed,
       turn: this.turn,
       phase: this.phase,
       winner: this.winner,
@@ -182,17 +177,16 @@ export class Draft {
     const d = new Draft(data.pool, {
       baseGold: data.baseGold,
       goldPerRound: data.goldPerRound,
-      picksPerPlayer: data.picksPerPlayer,
       rounds: data.rounds,
     });
     d.round = data.round;
     d.picks = data.picks;
     d.gold = data.gold;
+    d.passed = data.passed;
     d.turn = data.turn;
     d.phase = data.phase;
     d.winner = data.winner;
     d.dead = new Set(data.dead || []);
-    d._orderIndex = data.picks.a.length + data.picks.b.length;
     return d;
   }
 }
