@@ -1118,7 +1118,7 @@ export class Sim {
         this._say(u, 'retreating');
       }
       this._intent(u, 'retreating (leader call)');
-      this._moveAlongPath(u, this._exitGoal(), dt);
+      this._moveTo(u, this._exitGoal(), {}, dt);
       this._separate(u, allies, dt);
       this._resolveAttacks(u, target, enemies, allies);
       return;
@@ -1229,16 +1229,9 @@ export class Sim {
       const score = missing + this._getBond(u, a) * CONFIG.synergy.healBiasFactor;
       if (score > bestScore) { bestScore = score; best = a; }
     }
-    if (best) return best;
-    // No one hurt: fall back to the nearest non-self ally so we never point at
-    // ourselves.
-    let nearest = null, bestD = Infinity;
-    for (const a of allies) {
-      if (a === u || !a.alive) continue;
-      const d = dist(u.pos, a.pos);
-      if (d < bestD) { bestD = d; nearest = a; }
-    }
-    return nearest;
+    // No one hurt: return null so the healer engages enemies instead of
+    // trailing another support unit in a mutual-support loop.
+    return best;
   }
 
   // Shielders protect the ally currently under the most threat, so the
@@ -1259,6 +1252,8 @@ export class Sim {
       const score = threat + missing * 0.5 + this._getBond(u, a) * CONFIG.synergy.healBiasFactor;
       if (score > bestScore) { bestScore = score; best = a; }
     }
+    // No one needs a shield: return null so the shielder engages enemies
+    // instead of trailing another support unit in a mutual-support loop.
     return best;
   }
 
@@ -1278,20 +1273,20 @@ export class Sim {
         score = (a.def.attack ? a.def.attack.atk : 0) + this._getBond(u, a) * CONFIG.synergy.healBiasFactor;
       } else {
         // Mana: refill the ally that needs it most (has a pool and is low).
+        // Skip allies that don't use mana or are already full, so the
+        // channeler never wastes a cast on someone who can't benefit.
         if (a.maxMana <= 0) continue;
-        score = (a.maxMana - a.mana) + this._getBond(u, a) * CONFIG.synergy.healBiasFactor;
+        const need = a.maxMana - a.mana;
+        if (need <= 0) continue;
+        score = need + this._getBond(u, a) * CONFIG.synergy.healBiasFactor;
       }
       if (score > bestScore) { bestScore = score; best = a; }
     }
     if (best) return best;
-    // Fallback: nearest alive ally that isn't self.
-    let nearest = null, bestD = Infinity;
-    for (const a of allies) {
-      if (a === u || !a.alive) continue;
-      const d = dist(u.pos, a.pos);
-      if (d < bestD) { bestD = d; nearest = a; }
-    }
-    return nearest;
+    // No one needs a buff or mana: return null so the support unit engages
+    // enemies instead of trailing another support unit in a mutual-support
+    // loop. A channeler with nothing to refill should fight, not orbit.
+    return null;
   }
 
   // Raise a disposable minion near the summoner. It rushes the nearest enemy
@@ -1364,12 +1359,18 @@ export class Sim {
 
       // Intel: pounce on what I've personally softened, avoid what the team
       // knows hits hard (ramped by my own familiarity) unless it is already
-      // vulnerable (low HP).
+      // vulnerable (low HP). The danger penalty scales with how hurt I am: a
+      // healthy member shrugs off a hard-hitting enemy, but a low-HP member
+      // fears it — so a dying member won't dive onto a threat that will kill
+      // it while a healthy one still commits.
       const kill = u.killabilityOf(e);
       const danger = this.memberDanger(u, e.def.kind);
       const vulnerable = e.hp / e.maxHp < it.avoidHpFrac;
       const pounce = kill * it.pounceWeight;
-      const dangerPenalty = (danger > it.avoidDanger && !vulnerable) ? -(danger * it.dangerWeight) : 0;
+      const hurtScale = 1 - u.hp / u.maxHp; // 0 healthy .. 1 near-dead
+      const dangerPenalty = (danger > it.avoidDanger && !vulnerable)
+        ? -(danger * it.dangerWeight * (0.4 + hurtScale * 0.6))
+        : 0;
       score += pounce;
       score += dangerPenalty;
 
@@ -1440,7 +1441,7 @@ export class Sim {
     const threat = nearestEnemy(best, enemies);
     // Peel: move toward the enemy menacing the ally.
     this._intent(u, 'peeling for ally');
-    this._moveAlongPath(u, threat.pos, dt);
+    this._moveTo(u, threat.pos, { chase: true }, dt);
     this._separate(u, allies, dt);
     // Defending an ally strengthens the bond with them.
     this._growBond(u, best, CONFIG.synergy.peelBond);
@@ -1468,6 +1469,20 @@ export class Sim {
       target = pickTarget(u, candidates, u.attack.range);
     }
 
+    // Universal: critically low HP retreats toward the team, regardless of
+    // confidence or modifiers. Only fights enemies already in reach.
+    const hpFrac = u.hp / u.maxHp;
+    if (hpFrac < 0.25) {
+      const cluster = this._teamCluster(u, allies);
+      if (cluster) {
+        this._intent(u, 'retreating (critically hurt)');
+        this._moveTo(u, cluster, { chase: true }, dt);
+        this._separate(u, allies, dt);
+        this._resolveAttacks(u, target, enemies, allies);
+        return;
+      }
+    }
+
     // Seek heal: run to the healer while badly hurt.
     if (sp.includes('seekHeal')) {
       const hpFrac = u.hp / u.maxHp;
@@ -1482,7 +1497,7 @@ export class Sim {
         const healer = allies.find(a => a.alive && a !== u && a.attack && a.attack.type === 'heal');
         if (healer) {
           this._intent(u, 'seeking healer');
-          this._moveAlongPath(u, healer.pos, dt);
+          this._moveTo(u, healer.pos, { chase: true }, dt);
           this._separate(u, allies, dt);
           this._resolveAttacks(u, target, enemies, allies);
           return;
@@ -1501,7 +1516,7 @@ export class Sim {
           const away = norm(sub(protector.pos, threat.pos));
           const spot = add(protector.pos, scale(away, t.hideOffset));
           this._intent(u, 'hiding behind ally');
-          this._moveAlongPath(u, spot, dt);
+          this._moveTo(u, spot, {}, dt);
           this._separate(u, allies, dt);
           this._resolveAttacks(u, target, enemies, allies);
           return;
@@ -1726,7 +1741,7 @@ export class Sim {
     if (!goal) {
       // No goal (e.g. no enemies and no hurt ally): advance or idle.
       this._intent(u, 'advancing into combat');
-      this._moveAlongPath(u, this._advanceGoal(u), dt);
+      this._moveTo(u, this._advanceGoal(u), {}, dt);
       this._separate(u, allies, dt);
       return;
     }
@@ -1741,7 +1756,7 @@ export class Sim {
         return;
       }
       this._intent(u, 'approaching cautiously');
-      this._moveAlongPath(u, goal.pos, dt);
+      this._moveTo(u, goal.pos, {}, dt);
       this._separate(u, allies, dt);
       return;
     }
@@ -1753,13 +1768,35 @@ export class Sim {
       return;
     }
 
-    // High commitment: sprint to close on the goal.
+    // High commitment: close on the goal. The speed is a walk/sprint blend
+    // driven by urgency (how much the goal needs the member right now) and
+    // commitment (how hard the member pushes). A support unit sprints to
+    // close on its ally, then matches the ally's speed so it stays in range
+    // without overshooting or trailing behind.
     this._intent(u, goal.intent);
-    if (commit >= mv.sprintCommit) {
-      const dir = norm(sub(goal.pos, u.pos));
-      this._sprint(u, dir, dt);
+    const urgency = goal.urgency ?? 1;
+    const blend = clamp(commit * 0.5 + urgency * 0.5, 0, 1);
+    if (goal.ally && goal.ally.alive) {
+      // Sprint to close the gap, then match the ally's velocity so the
+      // support unit keeps pace with a moving ally. Closing speed eases off
+      // continuously as the unit nears the standoff distance (arrival
+      // easing), so it decelerates smoothly into position instead of coming
+      // to a hard stop, jittering, and re-sprinting. Stamina is drained only
+      // in proportion to how much faster than normal the unit is moving.
+      // Movement routes through _moveTo so it pathfinds around obstacles like
+      // every other movement, sprints to close, then matches the ally's speed.
+      this._moveTo(u, goal.ally.pos, {
+        follow: goal.ally,
+        standoff: u.attack.range * 0.5,
+        chase: true,
+      }, dt);
+    } else if (blend >= mv.sprintCommit) {
+      // High commitment: sprint to close on the goal. Unified through _moveTo
+      // so it gains speed when far, eases off when close, and drains stamina
+      // only for the portion above baseline.
+      this._moveTo(u, goal.pos, { chase: true }, dt);
     } else {
-      this._moveAlongPath(u, goal.pos, dt);
+      this._moveTo(u, goal.pos, { chase: true }, dt);
     }
     this._separate(u, allies, dt);
   }
@@ -1786,7 +1823,16 @@ export class Sim {
         const desired = Math.max(0, d - range * 0.5);
         const dir = d > 0 ? scale(to, 1 / d) : { x: 0, y: 0 };
         const label = type === 'heal' ? 'moving to heal' : type === 'shield' ? 'moving to shield' : 'moving to support';
-        return { pos: add(u.pos, scale(dir, desired)), intent: label };
+        // Urgency: how much the ally needs the cast right now. A healer
+        // rushes a bleeding ally, a channeler hurries to a dry mana pool, a
+        // buffer moves at a steady pace. This drives the walk/sprint blend.
+        let urgency = 0.5;
+        if (type === 'heal' || type === 'shield') {
+          urgency = clamp(1 - ally.hp / ally.maxHp, 0, 1);
+        } else if (type === 'mana') {
+          urgency = ally.maxMana > 0 ? clamp((ally.maxMana - ally.mana) / ally.maxMana, 0, 1) : 0;
+        }
+        return { pos: add(u.pos, scale(dir, desired)), intent: label, urgency, ally };
       }
       return null;
     }
@@ -1802,6 +1848,17 @@ export class Sim {
 
     // Damage goal: engage the focus target.
     if (target && target.alive) {
+      // A hurt member facing a dangerous target holds at range instead of
+      // diving in: stand just outside the enemy's reach and let it come.
+      const hpFrac = u.hp / u.maxHp;
+      const danger = this.memberDanger(u, target.def.kind);
+      if (hpFrac < 0.3 && danger > CONFIG.intel.avoidDanger) {
+        const to = sub(target.pos, u.pos);
+        const d = len(to);
+        const desired = Math.max(0, d - target.def.range - 0.5);
+        const dir = d > 0 ? scale(to, 1 / d) : { x: 0, y: 0 };
+        return { pos: add(u.pos, scale(dir, desired)), intent: 'holding at range (hurt)' };
+      }
       return { pos: target.pos, intent: 'advancing on target' };
     }
 
@@ -1830,12 +1887,16 @@ export class Sim {
     }
     const backupFrac = clamp(backup / 2, 0, 1);
 
-    const commit = clamp(
+    let commit = clamp(
       u.confidence * mv.confWeight +
       durFrac * mv.durWeight +
       backupFrac * mv.backupWeight,
       0, 1
     );
+    // A critically hurt member can't push hard into a fight, no matter how
+    // confident or backed up it feels. Cap commitment so it won't sprint in.
+    const hpFrac = u.hp / u.maxHp;
+    if (hpFrac < 0.3) commit = Math.min(commit, 0.3);
     // Store for the debug panel.
     u.commitment = commit;
     return commit;
@@ -2039,15 +2100,16 @@ export class Sim {
       }
       case 'mana': {
         // Restore an ally's mana pool so healers and shielders can keep
-        // casting. Costs the channeler's own mana to transfer.
+        // casting. Costs the channeler's own mana to transfer. Skip the cast
+        // if the target is already full — no point spending mana on someone
+        // who can't take any more.
         if (u.maxMana > 0 && u.mana < u.manaCost) {
           this._intent(u, 'out of mana');
           break;
         }
+        if (target.maxMana <= 0 || target.mana >= target.maxMana) break;
         if (u.maxMana > 0) u.mana -= u.manaCost;
-        if (target.maxMana > 0) {
-          target.mana = Math.min(target.maxMana, target.mana + CONFIG.mana.transfer);
-        }
+        target.mana = Math.min(target.maxMana, target.mana + CONFIG.mana.transfer);
         this._say(u, 'channeling', target);
         this.effects.push({
           type: 'mana', from: { ...u.pos }, to: { ...target.pos }, life: 0.4,
@@ -2321,27 +2383,23 @@ export class Sim {
     // Pick target: bias toward squishy (low-HP) and low-armor units.
     const target = this._pickBatTarget(u, enemies);
 
-    // Boids forces.
+    // Direct pursuit: steer straight at the target. Only wall avoidance and a
+    // light separation from other bats are kept, so the swarm commits to the
+    // fight instead of orbiting members on cohesion/alignment forces.
     const others = this.enemyUnits.filter(e => e.alive && e !== u);
     const sep = this._boidSeparation(u, others);
-    const coh = this._boidCohesion(u, others);
-    const ali = this._boidAlignment(u, others);
     const seek = this._boidSeek(u, target.pos);
     const wall = this._boidWallAvoidance(u);
 
     const b = CONFIG.boids;
-    // A taunted bat commits to its taunter: it charges straight in and ignores
-    // the scatter/cohesion forces that would otherwise let it drift away from
-    // a slow tank. Without this, separation (2.2) and wall (2.0) overwhelm the
-    // weak seek (0.7), so a fast bat endlessly kites a solo tank.
-    let fx, fy;
-    if (u.taunted) {
-      fx = seek.x * b.tauntSeekWeight + wall.x * b.wallWeight;
-      fy = seek.y * b.tauntSeekWeight + wall.y * b.wallWeight;
-    } else {
-      fx = sep.x * b.separationWeight + coh.x * b.cohesionWeight + ali.x * b.alignmentWeight + seek.x * b.seekWeight + wall.x * b.wallWeight;
-      fy = sep.y * b.separationWeight + coh.y * b.cohesionWeight + ali.y * b.alignmentWeight + seek.y * b.seekWeight + wall.y * b.wallWeight;
-    }
+    // When already in attack range, hold position and attack instead of being
+    // pushed around by separation (which otherwise orbits the bat just out of
+    // reach). Separation is damped near the target so the swarm packs in and
+    // lands hits rather than circling.
+    const inRange = target && dist(u.pos, target.pos) <= u.def.range;
+    const sepScale = inRange ? 0.15 : 1;
+    const fx = seek.x * b.seekWeight + sep.x * b.separationWeight * sepScale + wall.x * b.wallWeight;
+    const fy = seek.y * b.seekWeight + sep.y * b.separationWeight * sepScale + wall.y * b.wallWeight;
 
     const force = clampLen({ x: fx, y: fy }, b.maxForce);
     u.vel = clampLen(add(u.vel, scale(force, dt)), u.effSpeed);
@@ -2579,7 +2637,27 @@ export class Sim {
 
   // --- Shared movement / combat ---
 
-  _moveAlongPath(u, goal, dt) {
+  // Unified movement. Every path-based movement routes through here so the
+  // speed profile is consistent: speed up when far, ease off when close,
+  // match a followed target's velocity, and gain speed when chasing. Stamina
+  // is drained only in proportion to how much faster than baseline the unit
+  // moves. `opts`:
+  //   follow   - a Unit to keep pace with (its velocity is blended in)
+  //   chase    - push harder the farther behind the goal we are (catch up)
+  //   standoff - stop approaching once within this distance of `follow`
+  _moveTo(u, goal, opts = {}, dt) {
+    const { follow = null, chase = false, standoff = 0 } = opts;
+    const t = CONFIG.team;
+    const st = CONFIG.stamina;
+
+    // Following a target we're already close enough to: just match its speed
+    // instead of pathing into it.
+    if (follow && follow.alive && dist(u.pos, follow.pos) <= standoff) {
+      this._setVel(u, { ...follow.vel }, dt);
+      u.sprinting = false;
+      return;
+    }
+
     // Build a set of cells occupied by other units so pathfinding routes
     // around teammates instead of walking through them. Only units that are
     // actually standing in a cell count; the moving unit itself is excluded.
@@ -2596,7 +2674,7 @@ export class Sim {
     // re-evaluation; throttling it keeps movement smooth.
     const needRepath =
       !u.path || u.pathIndex >= u.path.length ||
-      !u.pathGoal || dist(u.pathGoal, goal) > CONFIG.team.repathDistance;
+      !u.pathGoal || dist(u.pathGoal, goal) > t.repathDistance;
     // If a straight line to the goal is clear, snap back to LOS and drop the
     // A* waypoints. This lets units cut corners the moment an obstacle stops
     // blocking them instead of walking the full grid path.
@@ -2622,12 +2700,12 @@ export class Sim {
       }
     }
     const dir = norm(sub(u.path[u.pathIndex], u.pos));
-    // Distance-based speed: full speed far away, easing down through a slow
-    // radius, then gliding to a stop within the arrival radius. This makes
-    // approach feel natural instead of a constant-speed march.
+
+    // Speed profile: full speed far away, easing down through the slow radius,
+    // then gliding to a stop within the arrival radius. This makes approach
+    // feel natural instead of a constant-speed march.
     const finalWp = u.path[u.path.length - 1];
     const dGoal = dist(u.pos, finalWp);
-    const t = CONFIG.team;
     let speed = u.effSpeed;
     if (dGoal < t.slowRadius) {
       const f = dGoal / t.slowRadius; // 0..1, 1 at the slow radius edge
@@ -2636,7 +2714,35 @@ export class Sim {
     if (dGoal < t.arrivalRadius) {
       speed = u.effSpeed * (dGoal / t.arrivalRadius);
     }
-    this._setVel(u, scale(dir, speed), dt);
+
+    // Chasing: gain speed to catch a moving goal. The farther behind we are,
+    // the harder we push, up to the sprint multiplier.
+    if (chase) {
+      const gap = dist(u.pos, goal);
+      speed = Math.max(speed, u.effSpeed * st.sprintMult * clamp(gap / t.slowRadius, 0, 1));
+    }
+
+    // Desired velocity: move along the path at `speed`, plus the followed
+    // target's own velocity so we keep pace once close (matching speed).
+    let desired = scale(dir, speed);
+    if (follow && follow.alive) desired = add(desired, follow.vel);
+
+    // Stamina: drain only for the portion of speed above baseline, so a unit
+    // doesn't burn stamina while merely keeping pace.
+    const over = Math.max(0, len(desired) - u.effSpeed);
+    if (over > 0) {
+      const floor = u.staminaMax * st.reserveFrac;
+      if (u.stamina > floor) {
+        u.sprinting = true;
+        u.stamina = Math.max(floor, u.stamina - st.sprintCost * dt * (over / (u.effSpeed * (st.sprintMult - 1))));
+      } else {
+        u.sprinting = false;
+      }
+    } else {
+      u.sprinting = false;
+    }
+
+    this._setVel(u, desired, dt);
   }
 
   // Subtle sinusoidal drift while holding still, so idle units look alive
