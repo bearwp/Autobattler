@@ -390,14 +390,14 @@ export const CONFIG = {
   // Boids parameters (bats)
   boids: {
     separationRadius: 1.0,
-    separationWeight: 1.6,
+    separationWeight: 0.9,
     cohesionRadius: 2.5,
-    cohesionWeight: 1.2,
-    alignmentWeight: 1.2,
-    seekWeight: 3.0,
+    cohesionWeight: 0.7,
+    alignmentWeight: 1.0,
+    seekWeight: 5.0,
     tauntSeekWeight: 1.6,   // taunted bats charge their taunter, ignoring scatter
     wallWeight: 1.5,
-    arrivalRadius: 1.5,     // bats ease off within this distance of their target
+    arrivalRadius: 0.8,     // bats ease off within this distance of their target
     targetStickiness: 1.5,  // score bonus to a bat's current target (desync)
     maxForce: 12,
   },
