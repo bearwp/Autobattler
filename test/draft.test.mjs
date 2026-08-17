@@ -1,12 +1,12 @@
-// Draft state machine tests: pass-based drafting, escalating gold,
-// availability, permadeath, and between-round reset.
+// Draft state machine tests: free alternating picks, availability,
+// permadeath, and between-round reset.
 //
 // Run with: node --test test/
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { Draft, PVP, buildPool, goldForRound } from '../js/pvp/draft.js';
+import { Draft, PVP, buildPool } from '../js/pvp/draft.js';
 
 // A minimal member bundle (same shape as CONFIG.roster entries).
 function member(id, overrides = {}) {
@@ -25,33 +25,16 @@ function member(id, overrides = {}) {
   };
 }
 
-// A pool of 8 members with distinct, affordable salaries.
+// A pool of 8 members.
 function pool() {
   return buildPool([
-    member('m1', { stats: { hp: 100, armor: 0, speed: 1, size: 0.5 }, attack: { type: 'damage', shape: 'meleeOneShot', range: 1, atk: 5 } }),
-    member('m2', { stats: { hp: 100, armor: 0, speed: 1, size: 0.5 }, attack: { type: 'damage', shape: 'meleeOneShot', range: 1, atk: 5 } }),
-    member('m3', { stats: { hp: 100, armor: 0, speed: 1, size: 0.5 }, attack: { type: 'damage', shape: 'meleeOneShot', range: 1, atk: 5 } }),
-    member('m4', { stats: { hp: 100, armor: 0, speed: 1, size: 0.5 }, attack: { type: 'damage', shape: 'meleeOneShot', range: 1, atk: 5 } }),
-    member('m5', { stats: { hp: 100, armor: 0, speed: 1, size: 0.5 }, attack: { type: 'damage', shape: 'meleeOneShot', range: 1, atk: 5 } }),
-    member('m6', { stats: { hp: 100, armor: 0, speed: 1, size: 0.5 }, attack: { type: 'damage', shape: 'meleeOneShot', range: 1, atk: 5 } }),
-    member('m7', { stats: { hp: 100, armor: 0, speed: 1, size: 0.5 }, attack: { type: 'damage', shape: 'meleeOneShot', range: 1, atk: 5 } }),
-    member('m8', { stats: { hp: 100, armor: 0, speed: 1, size: 0.5 }, attack: { type: 'damage', shape: 'meleeOneShot', range: 1, atk: 5 } }),
+    member('m1'), member('m2'), member('m3'), member('m4'),
+    member('m5'), member('m6'), member('m7'), member('m8'),
   ]);
 }
 
-test('goldForRound escalates by 100 each round', () => {
-  assert.equal(goldForRound(1), 100);
-  assert.equal(goldForRound(2), 200);
-  assert.equal(goldForRound(3), 300);
-});
-
-test('buildPool attaches a salary to each member', () => {
-  const p = pool();
-  assert.ok(p.every(m => typeof m.salary === 'number' && m.salary > 0));
-});
-
 test('draft alternates turns and lets a player pick multiple members', () => {
-  const d = new Draft(pool(), { baseGold: 100 });
+  const d = new Draft(pool());
   // A picks m1, then it's B's turn.
   assert.equal(d.turn, 'a');
   assert.equal(d.pick('a', 'm1'), true);
@@ -66,8 +49,8 @@ test('draft alternates turns and lets a player pick multiple members', () => {
   assert.deepEqual(d.picks.b, ['m2']);
 });
 
-test('pick validates turn, availability, and gold', () => {
-  const d = new Draft(pool(), { baseGold: 100 });
+test('pick validates turn and availability', () => {
+  const d = new Draft(pool());
   // Wrong player cannot pick.
   assert.equal(d.pick('b', 'm1'), false);
   // Correct player picks.
@@ -78,82 +61,35 @@ test('pick validates turn, availability, and gold', () => {
   assert.equal(d.pick('b', 'nope'), false);
 });
 
-test('a player cannot pick a member they cannot afford', () => {
-  const p = pool();
-  // Make m1 very expensive.
-  p[0].salary = 1000;
-  const d = new Draft(p, { baseGold: 100 });
-  assert.equal(d.canAfford('a', 'm1'), false);
-  assert.equal(d.pick('a', 'm1'), false);
-  // A cheap member is fine.
-  assert.equal(d.pick('a', 'm2'), true);
-});
-
-test('gold is deducted on pick and cannot go negative', () => {
-  const p = pool();
-  p[0].salary = 60;
-  p[1].salary = 60;
-  const d = new Draft(p, { baseGold: 100 });
-  assert.equal(d.pick('a', 'm1'), true);
-  assert.equal(d.gold.a, 40);
-  // m2 costs 60 > 40 remaining, so it must be rejected for A.
-  assert.equal(d.pick('a', 'm2'), false);
-  // B has a full budget and can afford it.
-  assert.equal(d.pick('b', 'm2'), true);
-  assert.equal(d.gold.b, 40);
-});
-
-test('pass ends a players drafting and hands the turn over', () => {
-  const d = new Draft(pool(), { baseGold: 100 });
-  // A passes first.
-  assert.equal(d.pass('a'), true);
-  assert.equal(d.passed.a, true);
-  assert.equal(d.turn, 'b');
-  // B can still pick.
-  assert.equal(d.pick('b', 'm1'), true);
-  // B passes, ending the round.
-  assert.equal(d.pass('b'), true);
+test('roundComplete requires both teams to have at least one member', () => {
+  const d = new Draft(pool());
+  assert.equal(d.roundComplete, false);
+  d.pick('a', 'm1');
+  assert.equal(d.roundComplete, false, 'team B has no members yet');
+  d.pick('b', 'm2');
   assert.equal(d.roundComplete, true);
-  assert.equal(d.phase, 'betweenRounds');
-  assert.equal(d.turn, null);
 });
 
-test('a passed player cannot pick again', () => {
-  const d = new Draft(pool(), { baseGold: 100 });
-  d.pass('a');
-  // A passed, so it can no longer pick.
-  assert.equal(d.pick('a', 'm1'), false);
-  // B is on turn and can pick.
-  assert.equal(d.pick('b', 'm1'), true);
-});
-
-test('nextRound resets picks, gold, and pass state but keeps the pool', () => {
-  const d = new Draft(pool(), { rounds: 3, baseGold: 100 });
+test('nextRound resets picks but keeps the pool', () => {
+  const d = new Draft(pool(), { rounds: 3 });
   d.pick('a', 'm1');
   d.pick('b', 'm2');
-  d.pass('a');
-  d.pass('b');
-  assert.equal(d.phase, 'betweenRounds');
+  d.pick('a', 'm3');
+  d.pick('b', 'm4');
 
   d.recordRoundResult('a');
   assert.equal(d.round, 2);
   assert.equal(d.phase, 'drafting');
   assert.deepEqual(d.picks, { a: [], b: [] });
-  assert.deepEqual(d.passed, { a: false, b: false });
-  assert.equal(d.gold.a, goldForRound(2));
-  assert.equal(d.gold.b, goldForRound(2));
   assert.equal(d.turn, 'a');
   assert.equal(d.pool.length, 8, 'pool is shared and persists across rounds');
 });
 
 test('recordRoundResult advances through rounds and ends the match', () => {
-  const d = new Draft(pool(), { rounds: 3, baseGold: 100 });
+  const d = new Draft(pool(), { rounds: 3 });
   for (let r = 0; r < 3; r++) {
     d.pick('a', 'm1');
     d.pick('b', 'm2');
-    d.pass('a');
-    d.pass('b');
-    assert.equal(d.phase, 'betweenRounds');
     d.recordRoundResult(r % 2 === 0 ? 'a' : 'b');
   }
   assert.equal(d.phase, 'done');
@@ -161,7 +97,7 @@ test('recordRoundResult advances through rounds and ends the match', () => {
 });
 
 test('dead members are removed from the pool (permadeath)', () => {
-  const d = new Draft(pool(), { baseGold: 100 });
+  const d = new Draft(pool());
   // Mark m1 and m2 dead.
   d.markDead(['m1', 'm2']);
   assert.equal(d.available('m1'), false);
@@ -174,20 +110,17 @@ test('dead members are removed from the pool (permadeath)', () => {
 });
 
 test('serialize/deserialize round-trips the draft state', () => {
-  const d = new Draft(pool(), { baseGold: 100 });
+  const d = new Draft(pool());
   d.pick('a', 'm1');
   d.pick('b', 'm2');
-  d.pass('a');
   d.markDead(['m3']);
   const snap = d.serialize();
   const d2 = Draft.deserialize(snap);
   assert.equal(d2.turn, d.turn);
   assert.equal(d2.phase, d.phase);
   assert.deepEqual(d2.picks, d.picks);
-  assert.deepEqual(d2.gold, d.gold);
-  assert.deepEqual(d2.passed, d.passed);
   assert.equal(d2.round, d.round);
   assert.deepEqual([...d2.dead], ['m3']);
-  // The guest can continue picking from the restored state (B is on turn).
-  assert.equal(d2.pick('b', 'm4'), true);
+  // The guest can continue picking from the restored state (A is on turn).
+  assert.equal(d2.pick('a', 'm4'), true);
 });

@@ -4,7 +4,7 @@ import { CONFIG, ATTACK_TYPES, TARGET_RULES, ATTACK_SHAPES, SHAPES, MODIFIERS, S
 import { Sim } from './sim/sim.js';
 import { Renderer } from './render/renderer.js';
 import { getMeta, addGold, spendGold, salaryOf, startingHero, rollTavernRecruits, completeRun, resetMeta } from './meta.js';
-import { Draft, PVP, buildPool, goldForRound } from './pvp/draft.js';
+import { Draft, PVP, buildPool } from './pvp/draft.js';
 import { PvpNet, unitSnap, remoteSim } from './pvp/net.js';
 
 const canvas = document.getElementById('game');
@@ -29,12 +29,10 @@ const pvpOverlayEl = document.getElementById('pvp-overlay');
 const pvpPoolEl = document.getElementById('pvp-pool');
 const pvpRoundEl = document.getElementById('pvp-round');
 const pvpTurnEl = document.getElementById('pvp-turn');
-const pvpGoldEl = document.getElementById('pvp-gold');
 const pvpTeamAEl = document.getElementById('pvp-team-a');
 const pvpTeamBEl = document.getElementById('pvp-team-b');
 const pvpStatusEl = document.getElementById('pvp-status');
 const btnPvpFight = document.getElementById('btn-pvp-fight');
-const btnPvpPass = document.getElementById('btn-pvp-pass');
 const btnPvpCancel = document.getElementById('btn-pvp-cancel');
 const pvpResultEl = document.getElementById('pvp-result');
 const pvpResultTitleEl = document.getElementById('pvp-result-title');
@@ -1026,9 +1024,8 @@ let pvpRemoteUnits = []; // guest's last snapshot units, for refreshing the card
 function pvpCard(m) {
   const dead = pvpDraft.dead.has(m.id);
   const picked = !dead && !pvpDraft.available(m.id);
-  const afford = pvpDraft.canAfford(pvpDraft.turn, m.id);
   const s = m.stats, a = m.attack;
-  const pickLabel = dead ? 'Fallen' : picked ? 'Picked' : afford ? 'Pick' : 'Too costly';
+  const pickLabel = dead ? 'Fallen' : picked ? 'Picked' : 'Pick';
   return `
     <div class="pvp-card ${dead ? 'dead' : picked ? 'picked' : ''}" data-id="${m.id}">
       <div class="pc-head">
@@ -1037,19 +1034,17 @@ function pvpCard(m) {
         <span class="pc-role">${m.role || ''}</span>
       </div>
       <div class="pc-stats">HP ${s.hp} · Arm ${s.armor} · Spd ${s.speed.toFixed(1)}</div>
-      <div class="pc-salary">🪙 ${m.salary}</div>
-      <div class="pc-pick ${dead ? 'dead' : picked ? '' : afford ? 'afford' : 'noafford'}">${pickLabel}</div>
+      <div class="pc-pick ${dead ? 'dead' : picked ? '' : 'afford'}">${pickLabel}</div>
     </div>`;
 }
 
 function renderPvpDraft() {
   pvpPoolEl.innerHTML = pvpDraft.pool.map(pvpCard).join('');
-  pvpRoundEl.textContent = `Round ${pvpDraft.round} / ${pvpDraft.rounds} · Budget 🪙 ${goldForRound(pvpDraft.round)}`;
+  pvpRoundEl.textContent = `Round ${pvpDraft.round} / ${pvpDraft.rounds}`;
   const turn = pvpDraft.turn;
   pvpTurnEl.innerHTML = turn
     ? `Your turn: <span class="turn-${turn}">Team ${turn.toUpperCase()}</span>`
     : 'Draft complete';
-  pvpGoldEl.textContent = `🪙 ${pvpDraft.gold[pvpDraft.turn] ?? 0}`;
   pvpTeamAEl.textContent = pvpDraft.team('a').map(m => m.name).join(', ') || '—';
   pvpTeamBEl.textContent = pvpDraft.team('b').map(m => m.name).join(', ') || '—';
   pvpStatusEl.textContent = pvpDraft.phase === 'betweenRounds'
@@ -1057,15 +1052,11 @@ function renderPvpDraft() {
     : pvpDraft.phase === 'done'
       ? 'Match over.'
       : `Team ${turn.toUpperCase()} picks next`;
-  // Pass is only available on the current player's turn.
-  btnPvpPass.disabled = !pvpDraft.isTurn(pvpDraft.turn);
   btnPvpFight.disabled = !pvpDraft.roundComplete;
 }
 
 function openPvpDraft() {
   pvpDraft = new Draft(buildPool(CONFIG.roster), {
-    baseGold: PVP.baseGold,
-    goldPerRound: PVP.goldPerRound,
     rounds: PVP.rounds,
   });
   pvpResultEl.classList.add('hidden');
@@ -1147,12 +1138,6 @@ function hostOnline() {
     if (msg.type === 'pick') {
       // The guest owns team B: only accept its pick when it's team B's turn.
       if (pvpDraft.turn === 'b' && pvpDraft.pick('b', msg.id)) {
-        renderPvpDraft();
-        broadcastDraft();
-      }
-    } else if (msg.type === 'pass') {
-      // The guest owns team B: only accept its pass when it's team B's turn.
-      if (pvpDraft.turn === 'b' && pvpDraft.pass('b')) {
         renderPvpDraft();
         broadcastDraft();
       }
@@ -1289,7 +1274,6 @@ function showPvpResult(winner) {
   });
 
   // Record the round result (advances to the next round or ends the match).
-  const matchOver = pvpDraft.phase === 'betweenRounds';
   pvpDraft.recordRoundResult(winner);
   const nextRound = pvpDraft.phase === 'drafting';
 
@@ -1300,7 +1284,7 @@ function showPvpResult(winner) {
   }
 
   if (nextRound) {
-    pvpResultSubEl.textContent = `Round ${pvpDraft.round} next. Budget rises to 🪙 ${goldForRound(pvpDraft.round)}.`;
+    pvpResultSubEl.textContent = `Round ${pvpDraft.round} next. Draft your teams again.`;
     btnPvpNext.classList.remove('hidden');
     btnPvpRematch.classList.add('hidden');
   } else {
@@ -1343,21 +1327,6 @@ pvpPoolEl.addEventListener('click', (e) => {
 });
 
 btnPvpFight.addEventListener('click', startPvpFight);
-
-// Pass: end the current player's drafting for this round. The guest sends a
-// pass message; the host applies it locally and broadcasts the new state.
-btnPvpPass.addEventListener('click', () => {
-  if (!pvpDraft) return;
-  if (pvpRole === 'guest') {
-    if (pvpDraft.turn === 'b') pvpNet.send({ type: 'pass' });
-    return;
-  }
-  const myTeam = pvpRole === 'host' ? 'a' : pvpDraft.turn;
-  if (pvpDraft.pass(myTeam)) {
-    renderPvpDraft();
-    broadcastDraft();
-  }
-});
 
 btnPvpCancel.addEventListener('click', () => {
   pvpOverlayEl.classList.add('hidden');
